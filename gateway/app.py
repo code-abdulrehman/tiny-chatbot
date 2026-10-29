@@ -88,7 +88,7 @@ def create_app(key_store=None, dev_api_key: str = "", router=None, store=None, b
                 url = "postgresql://" + url[len("postgresql+psycopg://"):]
             elif url.startswith("postgresql+asyncpg://"):
                 url = "postgresql://" + url[len("postgresql+asyncpg://"):]
-            app.state.pg = await asyncpg.connect(url)
+            app.state.pg = await asyncpg.create_pool(url, min_size=1, max_size=10)
 
         @app.on_event("shutdown")
         async def _disconnect_postgres():
