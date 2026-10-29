@@ -1,5 +1,6 @@
 import './styles.css';
 import { DEFAULT_SYSTEM_PROMPT, loadThreads, saveThreads, loadSettings, saveSettings, newThread, routeFor } from './storage.js';
+import { DEFAULT_GATEWAY_API_KEY, DEFAULT_GATEWAY_BASE_URL, DEFAULT_GATEWAY_MODEL, createGatewayChat, loadGatewaySettings, saveGatewaySettings } from './gateway.js';
 import { createElement, ArrowUp, Bot, Check, Clock, Copy, EllipsisVertical, Lock, Menu, MessageSquare, Pencil, Play, Plus, RotateCcw, Search, Settings, Square, Trash2, User } from 'lucide';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -23,7 +24,11 @@ root.innerHTML = `
       <p class="hint">Runs on your device · Chats stay in this browser · AI can make mistakes</p>
     </div>
   </main>
-  <dialog id="settings-dialog"><form method="dialog"><h2>Chat settings</h2><p class="model-name">onnx-community/Qwen2.5-0.5B-Instruct</p><label>Reply length (tokens)<select id="reply-tokens"><option>64</option><option>128</option><option>256</option></select></label><label>Recent context messages<select id="context-messages"><option>4</option><option>10</option><option>20</option></select></label><label>System prompt<textarea id="system-prompt" rows="6" maxlength="1200" spellcheck="true"></textarea></label><div class="prompt-help"><span>Applies to future replies in all chats.</span><button id="reset-system-prompt" type="button">Reset to default</button></div><p class="note">First load downloads model weights to your browser. WebGPU uses q4f16; CPU fallback uses q8. Chats are saved only in browser storage.</p><menu><button value="cancel">Cancel</button><button id="save-settings" value="save" class="primary">Save</button></menu></form></dialog>
+  <dialog id="settings-dialog"><form method="dialog"><h2>Chat settings</h2><p class="model-name">onnx-community/Qwen2.5-0.5B-Instruct</p><label>Reply length (tokens)<select id="reply-tokens"><option>64</option><option>128</option><option>256</option></select></label><label>Recent context messages<select id="context-messages"><option>4</option><option>10</option><option>20</option></select></label><label>System prompt<textarea id="system-prompt" rows="6" maxlength="1200" spellcheck="true"></textarea></label><div class="prompt-help"><span>Applies to future replies in all chats.</span><button id="reset-system-prompt" type="button">Reset to default</button></div><p class="note">First load downloads model weights to your browser. WebGPU uses q4f16; CPU fallback uses q8. Chats are saved only in browser storage.</p>
+  <label>Gateway base URL<input id="gateway-base-url" type="text" placeholder="http://127.0.0.1:8080" /></label>
+  <label>Gateway API key<input id="gateway-api-key" type="password" placeholder="Optional · Bearer key" /></label>
+  <label>Gateway model<input id="gateway-model" type="text" placeholder="org-model" /></label>
+  <menu><button value="cancel">Cancel</button><button id="save-settings" value="save" class="primary">Save</button></menu></form></dialog>
 `;
 
 const $ = (selector) => root.querySelector(selector);
@@ -66,6 +71,7 @@ const state = {
   worker: null,
   queuedTitle: false,
   status: 'Model loads on first message',
+  gateway: loadGatewaySettings(store),
 };
 
 function persist() {
@@ -241,7 +247,8 @@ function startGeneration({ retry = false, continuation = false } = {}) {
     thread.messages.push(message);
   }
   const id = crypto.randomUUID();
-  state.task = { id, thread, message, continuation, initialContent: message.content, stopped: false };
+  const task = { id, thread, message, continuation, initialContent: message.content, stopped: false };
+  state.task = task;
   setBusy(true);
   setStatus('Loading model / generating…');
   const messages = thread.messages.slice(0, -1).map(({ role, content }) => ({ role, content }));
@@ -249,7 +256,33 @@ function startGeneration({ retry = false, continuation = false } = {}) {
     messages.push({ role: 'assistant', content: message.content });
     messages.push({ role: 'user', content: 'Continue the previous answer from where it stopped. Do not repeat earlier text.' });
   }
+  if (state.gateway.apiKey) { void runGatewayTask(task, messages, state.settings.replyTokens); return; }
   getWorker().postMessage({ type: 'generate', id, messages, maxNewTokens: state.settings.replyTokens, contextMessages: state.settings.contextMessages, systemPrompt: state.settings.systemPrompt });
+}
+
+async function runGatewayTask(task, messages, maxTokens) {
+  try {
+    setStatus('Waiting for gateway…');
+    const response = await createGatewayChat({ baseUrl: state.gateway.baseUrl, apiKey: state.gateway.apiKey, messages, model: state.gateway.model || 'org-model', maxOutputTokens: maxTokens });
+    const content = response?.choices?.[0]?.message?.content || task.initialContent || '';
+    task.message.content = content;
+    task.message.truncated = false;
+    task.thread.updatedAt = new Date().toISOString();
+    state.task = null;
+    if (!task.thread.privateChat) persist();
+    renderMessages();
+    const last = state.current.messages.at(-1);
+    const canTitle = !task.thread.privateChat && task.thread.title === 'New conversation' && !task.thread.customTitle && task.thread.messages.length === 2 && task.message.content;
+    if (canTitle) {
+      const id = crypto.randomUUID();
+      state.queuedTitle = { id, thread: task.thread };
+      if (state.worker) state.worker.postMessage({ type: 'generate', id, title: true, messages: task.thread.messages.map(({ role, content }) => ({ role, content })) });
+    }
+    setBusy(false);
+    setStatus('Ready');
+  } catch (error) {
+    finishError(error?.message || 'Gateway request failed.');
+  }
 }
 
 function onWorkerMessage({ data }) {
@@ -360,6 +393,12 @@ $('#save-settings').addEventListener('click', () => {
     systemPrompt: $('#system-prompt').value.trim() || DEFAULT_SYSTEM_PROMPT,
   };
   if (!saveSettings(store, state.settings)) setStatus('Could not save settings in this browser.');
+  state.gateway = {
+    baseUrl: String($('#gateway-base-url').value || DEFAULT_GATEWAY_BASE_URL).replace(/\/+$/, ''),
+    apiKey: String($('#gateway-api-key').value || DEFAULT_GATEWAY_API_KEY),
+    model: String($('#gateway-model').value || DEFAULT_GATEWAY_MODEL),
+  };
+  if (!saveGatewaySettings(store, state.gateway)) setStatus('Could not save gateway settings in this browser.');
 });
 window.addEventListener('popstate', () => {
   if (state.busy) return;
