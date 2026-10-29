@@ -1,0 +1,56 @@
+# Local Python environments and generated files (at any depth)
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Downloaded models, datasets, and package caches
+models/
+checkpoints/
+datasets/
+.uv-cache/
+.cache/
+*.safetensors
+*.gguf
+*.ggml
+*.onnx
+*.onnx_data
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.h5
+*.hdf5
+*.tflite
+*.arrow
+*.parquet
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+kaggle.json
+**/.streamlit/secrets.toml
+.aws/
+.codex/
+
+# Runtime and editor files
+*.log
+*.pid
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
