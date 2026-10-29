@@ -1,6 +1,8 @@
 import './styles.css';
 import { loadThreads, saveThreads, loadSettings, saveSettings, newThread, routeFor } from './storage.js';
 import { createElement, ArrowUp, Bot, Check, Clock, Copy, EllipsisVertical, Lock, Menu, MessageSquare, Pencil, Play, Plus, RotateCcw, Search, Settings, Square, Trash2, User } from 'lucide';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 const root = document.querySelector('#app');
 root.innerHTML = `
@@ -31,6 +33,21 @@ const icon = (definition, className = 'ui-icon') => {
   svg.setAttribute('aria-hidden', 'true');
   return svg;
 };
+function renderMarkdown(element, source) {
+  try {
+    const html = marked.parse(source || '', { gfm: true, breaks: true });
+    element.innerHTML = DOMPurify.sanitize(html, {
+      USE_PROFILES: { html: true },
+      FORBID_TAGS: ['img', 'iframe', 'video', 'audio', 'source'],
+    });
+    for (const link of element.querySelectorAll('a')) {
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
+  } catch {
+    element.textContent = source || '';
+  }
+}
 $('#new-chat').prepend(icon(Plus));
 $('#private-label').prepend(icon(Lock));
 $('.search-wrap').prepend(icon(Search));
@@ -145,19 +162,19 @@ function messageElement(message, lastAssistant) {
   body.className = 'message-body';
   const content = document.createElement('div');
   content.className = 'content';
-  content.textContent = message.content;
+  renderMarkdown(content, message.content);
   const footer = document.createElement('div');
   footer.className = 'message-footer';
   const actions = document.createElement('span');
   actions.className = 'message-actions';
+  const copy = document.createElement('button');
+  copy.append(icon(Copy), document.createTextNode('Copy'));
+  copy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(message.content); copy.replaceChildren(icon(Check), document.createTextNode('Copied')); }
+    catch { copy.replaceChildren(icon(Copy), document.createTextNode('Copy failed')); }
+  });
+  actions.append(copy);
   if (message.role === 'assistant') {
-    const copy = document.createElement('button');
-    copy.append(icon(Copy), document.createTextNode('Copy'));
-    copy.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(message.content); copy.replaceChildren(icon(Check), document.createTextNode('Copied')); }
-      catch { copy.replaceChildren(icon(Copy), document.createTextNode('Copy failed')); }
-    });
-    actions.append(copy);
     if (lastAssistant && !state.busy) {
       const retry = document.createElement('button');
       retry.append(icon(RotateCcw), document.createTextNode('Retry'));
@@ -258,7 +275,7 @@ function onWorkerMessage({ data }) {
   if (data.type === 'token') {
     task.message.content += data.text;
     const content = $('#messages .message:last-child .content');
-    if (content) content.textContent = task.message.content;
+    if (content) renderMarkdown(content, task.message.content);
     $('#messages').scrollTop = $('#messages').scrollHeight;
     return;
   }
