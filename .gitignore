@@ -48,6 +48,11 @@ kaggle.json
 .codex/
 
 # Runtime and editor files
+data/
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
 *.log
 *.pid
 .DS_Store
