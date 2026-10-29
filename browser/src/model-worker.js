@@ -1,8 +1,8 @@
 import { pipeline, TextStreamer, InterruptableStoppingCriteria } from '@huggingface/transformers';
+import { DEFAULT_SYSTEM_PROMPT, MAX_SYSTEM_PROMPT_LENGTH } from './storage.js';
 
 // The ONNX weights are fetched from Hugging Face by each browser and cached there.
 const MODEL = 'onnx-community/Qwen2.5-0.5B-Instruct';
-const SYSTEM = 'You are Tiny Chat, a concise helpful assistant. Answer in the language of the user. Say when you are unsure.';
 let generator;
 let loading;
 let device;
@@ -53,7 +53,7 @@ function answerText(output) {
   return '';
 }
 
-async function generate({ id, messages, maxNewTokens, contextMessages, title = false }) {
+async function generate({ id, messages, maxNewTokens, contextMessages, systemPrompt, title = false }) {
   currentId = id;
   const model = await loadModel();
   if (cancelled.delete(id)) {
@@ -73,10 +73,12 @@ async function generate({ id, messages, maxNewTokens, contextMessages, title = f
     },
     token_callback_function: () => { tokenCount += 1; },
   });
+  const instruction = typeof systemPrompt === 'string' && systemPrompt.trim() && systemPrompt.length <= MAX_SYSTEM_PROMPT_LENGTH
+    ? systemPrompt.trim() : DEFAULT_SYSTEM_PROMPT;
   const history = title
     ? [{ role: 'system', content: 'Write a short 2 to 5 word title for this conversation. Output only the title.' },
       { role: 'user', content: messages.slice(0, 2).map((m) => `${m.role}: ${m.content}`).join('\n') }]
-    : [{ role: 'system', content: SYSTEM }, ...messages.slice(-contextMessages)];
+    : [{ role: 'system', content: instruction }, ...messages.slice(-contextMessages)];
   try {
     const output = await model(history, {
       max_new_tokens: title ? 16 : maxNewTokens,

@@ -1,5 +1,5 @@
 import './styles.css';
-import { loadThreads, saveThreads, loadSettings, saveSettings, newThread, routeFor } from './storage.js';
+import { DEFAULT_SYSTEM_PROMPT, loadThreads, saveThreads, loadSettings, saveSettings, newThread, routeFor } from './storage.js';
 import { createElement, ArrowUp, Bot, Check, Clock, Copy, EllipsisVertical, Lock, Menu, MessageSquare, Pencil, Play, Plus, RotateCcw, Search, Settings, Square, Trash2, User } from 'lucide';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -23,7 +23,7 @@ root.innerHTML = `
       <p class="hint">Runs on your device · Chats stay in this browser · AI can make mistakes</p>
     </div>
   </main>
-  <dialog id="settings-dialog"><form method="dialog"><h2>Chat settings</h2><p class="model-name">onnx-community/Qwen2.5-0.5B-Instruct</p><label>Reply length (tokens)<select id="reply-tokens"><option>64</option><option>128</option><option>256</option></select></label><label>Recent context messages<select id="context-messages"><option>4</option><option>10</option><option>20</option></select></label><p class="note">First load downloads model weights to your browser. WebGPU uses q4f16; CPU fallback uses q8. Chats are saved only in browser storage.</p><menu><button value="cancel">Cancel</button><button id="save-settings" value="save" class="primary">Save</button></menu></form></dialog>
+  <dialog id="settings-dialog"><form method="dialog"><h2>Chat settings</h2><p class="model-name">onnx-community/Qwen2.5-0.5B-Instruct</p><label>Reply length (tokens)<select id="reply-tokens"><option>64</option><option>128</option><option>256</option></select></label><label>Recent context messages<select id="context-messages"><option>4</option><option>10</option><option>20</option></select></label><label>System prompt<textarea id="system-prompt" rows="6" maxlength="1200" spellcheck="true"></textarea></label><div class="prompt-help"><span>Applies to future replies in all chats.</span><button id="reset-system-prompt" type="button">Reset to default</button></div><p class="note">First load downloads model weights to your browser. WebGPU uses q4f16; CPU fallback uses q8. Chats are saved only in browser storage.</p><menu><button value="cancel">Cancel</button><button id="save-settings" value="save" class="primary">Save</button></menu></form></dialog>
 `;
 
 const $ = (selector) => root.querySelector(selector);
@@ -249,7 +249,7 @@ function startGeneration({ retry = false, continuation = false } = {}) {
     messages.push({ role: 'assistant', content: message.content });
     messages.push({ role: 'user', content: 'Continue the previous answer from where it stopped. Do not repeat earlier text.' });
   }
-  getWorker().postMessage({ type: 'generate', id, messages, maxNewTokens: state.settings.replyTokens, contextMessages: state.settings.contextMessages });
+  getWorker().postMessage({ type: 'generate', id, messages, maxNewTokens: state.settings.replyTokens, contextMessages: state.settings.contextMessages, systemPrompt: state.settings.systemPrompt });
 }
 
 function onWorkerMessage({ data }) {
@@ -349,10 +349,16 @@ $('#mobile-menu').addEventListener('click', () => document.body.classList.toggle
 $('#settings-button').addEventListener('click', () => {
   $('#reply-tokens').value = String(state.settings.replyTokens);
   $('#context-messages').value = String(state.settings.contextMessages);
+  $('#system-prompt').value = state.settings.systemPrompt;
   $('#settings-dialog').showModal();
 });
+$('#reset-system-prompt').addEventListener('click', () => { $('#system-prompt').value = DEFAULT_SYSTEM_PROMPT; });
 $('#save-settings').addEventListener('click', () => {
-  state.settings = { replyTokens: Number($('#reply-tokens').value), contextMessages: Number($('#context-messages').value) };
+  state.settings = {
+    replyTokens: Number($('#reply-tokens').value),
+    contextMessages: Number($('#context-messages').value),
+    systemPrompt: $('#system-prompt').value.trim() || DEFAULT_SYSTEM_PROMPT,
+  };
   if (!saveSettings(store, state.settings)) setStatus('Could not save settings in this browser.');
 });
 window.addEventListener('popstate', () => {

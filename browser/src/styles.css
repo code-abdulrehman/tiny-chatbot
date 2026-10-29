@@ -92,11 +92,16 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .hint { text-align: center; color: #8e939e; font-size: 11px; margin: 8px 0 0; }
 .continue-button { display: inline-flex; align-items: center; gap: 6px; background: #343740; color: #f0f2f5; border: 1px solid #565965; border-radius: 8px; padding: 7px 12px; margin-bottom: 9px; }
 .continue-button:hover { background: #454956; }
-dialog { width: min(420px, calc(100vw - 24px)); border: 1px solid #4f535c; border-radius: 13px; padding: 24px; background: #292c34; color: #f4f5f8; box-shadow: 0 20px 80px #0009; }
+dialog { width: min(420px, calc(100vw - 24px)); max-height: 90dvh; overflow-y: auto; border: 1px solid #4f535c; border-radius: 13px; padding: 24px; background: #292c34; color: #f4f5f8; box-shadow: 0 20px 80px #0009; }
 dialog::backdrop { background: #0009; }
 dialog h2 { margin: 0 0 10px; }
 dialog label { display: block; margin: 18px 0; font-size: 13px; }
 dialog select { display: block; width: 100%; background: #17191e; color: white; border: 1px solid #4f535c; border-radius: 7px; padding: 8px; margin-top: 6px; }
+dialog textarea { display: block; width: 100%; min-height: 130px; resize: vertical; background: #17191e; color: white; border: 1px solid #4f535c; border-radius: 7px; padding: 10px; margin-top: 6px; line-height: 1.5; }
+dialog textarea:focus { outline: 1px solid #ff626a; border-color: #ff626a; }
+.prompt-help { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #adb2bc; font-size: 11px; margin-top: -10px; }
+.prompt-help button { border: 0; background: transparent; color: #ff9da1; padding: 4px 0; white-space: nowrap; }
+.prompt-help button:hover { text-decoration: underline; }
 .model-name, .note { color: #adb2bc; font-size: 12px; line-height: 1.5; }
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 22px 0 0; }
 dialog menu button { border: 1px solid #5c6069; border-radius: 8px; color: white; background: transparent; padding: 8px 14px; }

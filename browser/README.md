@@ -4,6 +4,8 @@ This is a separate browser-only edition of Tiny Chat. The existing Streamlit app
 
 The interface uses locally bundled [Lucide](https://lucide.dev/) SVG icons. The app logo and favicon are included in `public/favicon.svg`.
 
+The Settings dialog lets each browser save an editable system prompt. The default asks the model to answer the latest request directly and stay on topic. Changing it affects future replies, including replies in existing chats. Reset to default restores the original instruction. A small model can still misinterpret prompts or produce incorrect answers.
+
 ## Run locally
 
 Install Node.js 20.19+ and npm, then:
