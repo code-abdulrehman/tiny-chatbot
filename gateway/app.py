@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from gateway import adapters as adapter_module
 from gateway import auth as auth_module
 from gateway import audit
+from gateway import billing
 from gateway import config, errors, quota, router as router_module
 from gateway.errors import GatewayError, gateway_error_handler
 from gateway.auth import Principal
@@ -163,6 +164,15 @@ def create_app(key_store, dev_api_key: str = "", router=None) -> FastAPI:
     def suspend_key(key_id: str, principal: Principal = Depends(require_admin)):
         suspended = app.state.key_store.suspend(key_id)
         return {"id": key_id, "suspended": suspended}
+
+    @app.post("/webhooks/billing")
+    async def billing_webhook(request: Request, stripe_signature: str = Header(default="")):
+        payload = await request.body()
+        if not billing.verify_signature(payload, stripe_signature, config.STRIPE_WEBHOOK_SECRET):
+            raise errors.GatewayError("invalid_request", "Stripe webhook signature verification failed.")
+        event = json.loads(payload)
+        result = billing.process_event(event)
+        return {"ok": result["ok"], "event": result["event"]}
 
     return app
 
