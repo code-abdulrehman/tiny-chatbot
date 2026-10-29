@@ -62,3 +62,5 @@ Thumbs.db
 node_modules/
 browser/dist/
 .vercel/
+.vercel
+.env*
