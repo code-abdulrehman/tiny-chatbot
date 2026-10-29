@@ -42,7 +42,7 @@ class AuditLog:
 AUDIT_LOG = AuditLog()
 
 
-def record(event: str, subject: str, detail: Optional[dict] = None, log: Optional[AuditLog] = None) -> AuditEvent:
+def record(event: str, subject: str, detail: Optional[dict] = None, log: Optional[AuditLog] = None, org_id: Optional[str] = None, **kwargs) -> AuditEvent:
     return (log or AUDIT_LOG).record(event, subject, detail)
 
 

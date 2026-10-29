@@ -105,6 +105,12 @@ class Request:
     settled_at: Optional[int] = None
 
 
+DEFAULT_PLANS = [
+    {"plan_id": "free", "version": 1, "name": "Free", "rolling_credits": 10000, "monthly_credits": 10000, "requests_per_minute": 10, "concurrent_generations": 1, "max_output_tokens": 256, "input_credit_weight": 1, "output_credit_weight": 2},
+    {"plan_id": "pro", "version": 1, "name": "Pro", "rolling_credits": 100000, "monthly_credits": 100000, "requests_per_minute": 60, "concurrent_generations": 4, "max_output_tokens": 1024, "input_credit_weight": 1, "output_credit_weight": 2},
+]
+
+
 class Organizations:
     def __init__(self):
         self._items = {}
@@ -243,6 +249,8 @@ class GatewayStore:
         self.ledger = UsageLedger()
         self.audit = AuditEvents()
         self.subscriptions = Subscriptions()
+        self.credits = {}
+        self.entitlements = {}
 
 
 class PostgresQuotaHolds:

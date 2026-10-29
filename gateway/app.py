@@ -42,6 +42,19 @@ class CreateKeyRequest(BaseModel):
     expires_at: Optional[int] = None
 
 
+class SelectPlanRequest(BaseModel):
+    org_id: str = ""
+    user_id: str = ""
+    plan_id: str = "free"
+    plan_version: int = 1
+
+
+class GrantCreditsRequest(BaseModel):
+    org_id: str = ""
+    amount: int = Field(..., gt=0)
+    reason: str = "manual_grant"
+
+
 def create_app(key_store=None, dev_api_key: str = "", router=None, store=None, backend: Optional[str] = None, postgres=None) -> FastAPI:
     if key_store is None:
         key_store = auth_module.InMemoryKeyStore()
@@ -221,6 +234,36 @@ def create_app(key_store=None, dev_api_key: str = "", router=None, store=None, b
         suspended = app.state.key_store.suspend(key_id)
         return {"id": key_id, "suspended": suspended}
 
+    @app.get("/v1/admin/plans")
+    def list_plans(principal: Principal = Depends(require_admin)):
+        return {"object": "list", "data": stores.DEFAULT_PLANS}
+
+    @app.post("/v1/admin/entitlements")
+    async def select_plan(request: SelectPlanRequest, principal: Principal = Depends(require_admin)):
+        org_id = request.org_id or principal.org_id
+        user_id = request.user_id or principal.principal_id
+        entitlement_id = f"ent_{uuid4().hex[:12]}"
+        if app.state.backend == "postgres" and app.state.pg is not None:
+            await stores.ensure_entitlement(app.state.pg, entitlement_id, org_id, user_id, request.plan_id, request.plan_version)
+        else:
+            app.state.store.entitlements.setdefault(org_id, []).append({"entitlement_id": entitlement_id, "user_id": user_id, "plan_id": request.plan_id, "plan_version": request.plan_version, "status": "active"})
+        audit.record(audit.KEY_CREATED, entitlement_id, {"org_id": org_id, "plan_id": request.plan_id}, org_id=org_id)
+        return {"entitlement_id": entitlement_id, "org_id": org_id, "user_id": user_id, "plan_id": request.plan_id, "plan_version": request.plan_version, "status": "active"}
+
+    @app.post("/v1/admin/credits")
+    async def grant_credits(request: GrantCreditsRequest, principal: Principal = Depends(require_admin)):
+        org_id = request.org_id or principal.org_id
+        if app.state.backend == "postgres" and app.state.pg is not None:
+            synthetic_request_id = f"adj_{uuid4().hex}"
+            await stores.ensure_request_context(app.state.pg, org_id, principal.principal_id, synthetic_request_id, model="credit-adjustment", input_tokens=0, max_output_tokens=1, key_id=None)
+            entry = stores.UsageLedgerEntry(entry_id=f"led_{uuid4().hex}", org_id=org_id, principal_id=principal.principal_id, request_id=synthetic_request_id, model="credit-adjustment", credits=request.amount, phase="adjustment", usage_source="manual")
+            await stores.PostgresUsageLedger(app.state.pg).append(entry)
+        else:
+            app.state.store.credits[org_id] = app.state.store.credits.get(org_id, 0) + request.amount
+            app.state.store.ledger.append(stores.UsageLedgerEntry(entry_id=f"led_{uuid4().hex}", org_id=org_id, principal_id=principal.principal_id, request_id=f"adj_{uuid4().hex}", model="credit-adjustment", credits=request.amount, phase="adjustment", usage_source="manual"))
+        audit.record(audit.KEY_CREATED, f"credits:{org_id}", {"amount": request.amount, "reason": request.reason}, org_id=org_id)
+        return {"org_id": org_id, "amount": request.amount, "reason": request.reason, "ok": True}
+
     @app.post("/webhooks/billing")
     async def billing_webhook(request: Request, stripe_signature: str = Header(default="")):
         payload = await request.body()
@@ -228,7 +271,7 @@ def create_app(key_store=None, dev_api_key: str = "", router=None, store=None, b
             raise errors.GatewayError("invalid_request", "Stripe webhook signature verification failed.")
         event = json.loads(payload)
         if app.state.backend == "postgres" and app.state.pg is not None:
-            result = await app.state.pg.apply(event)
+            result = await stores.PostgresSubscriptions(app.state.pg).apply(event)
         else:
             result = billing.process_event(event, state=app.state.store.subscriptions)
         return {"ok": result["ok"], "event": result["event"]}
