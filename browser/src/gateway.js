@@ -39,13 +39,36 @@ export async function listGatewayModels(baseUrl, apiKey) {
   return data;
 }
 
-export async function createGatewayChat({ baseUrl, apiKey, messages, model, maxOutputTokens }) {
+export async function createGatewayChat({ baseUrl, apiKey, messages, model, maxOutputTokens, stream = true, onToken }) {
   const response = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers: gatewayHeaders(apiKey),
-    body: JSON.stringify({ model, messages, max_output_tokens: maxOutputTokens, stream: false }),
+    body: JSON.stringify({ model, messages, max_output_tokens: maxOutputTokens, stream }),
   });
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(data?.error?.message || `Gateway chat failed with status ${response.status}`);
-  return data;
+  if (!stream) return data;
+  if (!response.body) throw new Error('Gateway did not return a streaming response body.');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  let settled = false;
+  while (!settled) {
+    const { done: streamDone, value } = await reader.read();
+    if (streamDone) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload) continue;
+      const event = JSON.parse(payload);
+      if (event.event === 'token') { content += event.text || ''; onToken?.(event.text || ''); }
+      if (event.event === 'done') { settled = true; break; }
+    }
+  }
+  const finalContent = content || data?.choices?.[0]?.message?.content || '';
+  return { ...data, choices: [{ ...(data?.choices?.[0] || {}), message: { ...(data?.choices?.[0]?.message || {}), content: finalContent }, finish_reason: (data?.choices?.[0]?.finish_reason) || 'stop' }] };
 }

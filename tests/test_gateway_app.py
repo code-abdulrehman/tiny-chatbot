@@ -24,6 +24,11 @@ class FakeAdapter(adapters.Adapter):
         return sum(adapters.estimate_tokens(adapters.message_text(m)) for m in messages or [] if isinstance(m, dict))
 
     def generate(self, request, cancellation=None):
+        if request.stream:
+            return iter([
+                {"type": "token", "text": "Reply"},
+                {"type": "done", "content": "Reply", "finish_reason": "stop", "usage": {"prompt_tokens": 3, "completion_tokens": 5}},
+            ])
         return iter([{"content": f"Reply to {request.messages[-1].get('content')}", "finish_reason": "stop", "usage": {"prompt_tokens": 3, "completion_tokens": 5}}])
 
     def cancel(self, request_id):
@@ -111,6 +116,8 @@ class GatewayAppTests(unittest.TestCase):
         response = self.client.post("/v1/chat/completions", json={"model": "org-model", "messages": [{"role": "user", "content": "Hello"}], "max_output_tokens": 64, "stream": True}, headers=self.headers)
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+        self.assertIn("event: token", response.text)
+        self.assertIn("event: done", response.text)
 
     def test_admin_creates_key_and_new_key_can_chat(self):
         created = self.client.post("/v1/admin/keys", json={"org_id": "org-1", "principal_id": "user-1", "scopes": ["inference:chat"]}, headers=self.headers)

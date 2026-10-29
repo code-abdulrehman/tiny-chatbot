@@ -127,6 +127,15 @@ def create_app(key_store=None, dev_api_key: str = "", router=None, store=None, b
             app.state.store.holds.settle(hold.hold_id, int(time()))
         decision = app.state.quota.evaluate(0, quota.Limits(rolling_credits=config.FREE_CREDITS))
 
+        if body.stream:
+            def sse():
+                for event in events:
+                    if event.get("type") == "token":
+                        yield f"event: token\ndata: {json.dumps({'event': 'token', 'text': event.get('text') or ''})}\n\n"
+                    elif event.get("type") == "done":
+                        yield f"event: done\ndata: {json.dumps({'event': 'done', 'content': event.get('content') or '', 'usage': event.get('usage') or {}, 'finish_reason': event.get('finish_reason') or 'stop'})}\n\n"
+            return StreamingResponse(sse(), media_type="text/event-stream")
+
         content = final.get("content") or ""
         response = {
             "id": request_id,

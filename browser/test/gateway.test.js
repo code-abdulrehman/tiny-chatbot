@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_GATEWAY_API_KEY, DEFAULT_GATEWAY_BASE_URL, DEFAULT_GATEWAY_MODEL, gatewayHeaders, loadGatewaySettings, saveGatewaySettings } from '../src/gateway.js';
-
+import { DEFAULT_GATEWAY_API_KEY, DEFAULT_GATEWAY_BASE_URL, DEFAULT_GATEWAY_MODEL, createGatewayChat, gatewayHeaders, loadGatewaySettings, saveGatewaySettings } from '../src/gateway.js';
 function memoryStore() {
   const items = new Map();
   return {
@@ -22,4 +21,28 @@ test('gateway settings load defaults and persist overrides', () => {
 test('gateway headers include bearer auth only when a key is present', () => {
   assert.deepEqual(gatewayHeaders('gk_test'), { 'Content-Type': 'application/json', Authorization: 'Bearer gk_test' });
   assert.deepEqual(gatewayHeaders(''), { 'Content-Type': 'application/json' });
+});
+
+test('createGatewayChat streams tokens from an SSE response', async () => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"event":"token","text":"Hi"}\n\n'));
+      controller.enqueue(encoder.encode('data: {"event":"done","content":"Hi"}\n\n'));
+      controller.close();
+    },
+  });
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}), body: stream });
+  const received = [];
+  const response = await createGatewayChat({
+    baseUrl: DEFAULT_GATEWAY_BASE_URL,
+    apiKey: DEFAULT_GATEWAY_API_KEY,
+    messages: [{ role: 'user', content: 'Hello' }],
+    model: DEFAULT_GATEWAY_MODEL,
+    maxOutputTokens: 64,
+    stream: true,
+    onToken: (token) => received.push(token),
+  });
+  assert.equal(response.choices[0].message.content, 'Hi');
+  assert.deepEqual(received, ['Hi']);
 });

@@ -263,7 +263,7 @@ function startGeneration({ retry = false, continuation = false } = {}) {
 async function runGatewayTask(task, messages, maxTokens) {
   try {
     setStatus('Waiting for gateway…');
-    const response = await createGatewayChat({ baseUrl: state.gateway.baseUrl, apiKey: state.gateway.apiKey, messages, model: state.gateway.model || 'org-model', maxOutputTokens: maxTokens });
+    const response = await createGatewayChat({ baseUrl: state.gateway.baseUrl, apiKey: state.gateway.apiKey, messages, model: state.gateway.model || 'org-model', maxOutputTokens: maxTokens, stream: true, onToken: (token) => { if (token) task.message.content += token; } });
     const content = response?.choices?.[0]?.message?.content || task.initialContent || '';
     task.message.content = content;
     task.message.truncated = false;

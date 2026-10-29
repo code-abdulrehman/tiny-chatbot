@@ -3,10 +3,11 @@
 Implements the adapter contract described in docs/model-gateway-architecture.md section 2.
 """
 
+import json
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Iterator, Optional
+from typing import Iterator, Optional
 
 CHAT = "chat"
 COMPLETION = "completion"
@@ -129,6 +130,35 @@ class OpenAICompatibleAdapter(Adapter):
             "messages": request.messages,
             "max_tokens": request.max_output_tokens,
         }
+        if request.stream:
+            events = []
+            with httpx.Client() as client:
+                with client.stream("POST", url, json=payload, headers={"Authorization": f"Bearer {self.api_key}"}, timeout=30.0) as response:
+                    if response.status_code != 200:
+                        raise errors.GatewayError("model_error", f"Upstream chat completion failed with status {response.status_code}.")
+                    final = {}
+                    for line in response.iter_lines():
+                        stripped = line.strip()
+                        if not stripped.startswith("data:"):
+                            continue
+                        data_str = stripped[len("data:"):].strip()
+                        if data_str == "[DONE]":
+                            continue
+                        data = json.loads(data_str)
+                        delta = (data.get("choices") or [{}])[0].get("delta") or {}
+                        content = delta.get("content") or ""
+                        if content:
+                            events.append({"type": "token", "text": content})
+                        final = data
+            done_content = "".join(event["text"] for event in events)
+            usage = final.get("usage") or {}
+            events.append({
+                "type": "done",
+                "content": done_content,
+                "finish_reason": (final.get("choices") or [{}])[0].get("finish_reason") or "stop",
+                "usage": {"prompt_tokens": usage.get("prompt_tokens") or 0, "completion_tokens": usage.get("completion_tokens") or 0},
+            })
+            return iter(events)
         response = httpx.post(url, json=payload, headers={"Authorization": f"Bearer {self.api_key}"}, timeout=30.0)
         if response.status_code != 200:
             from gateway import errors
@@ -175,6 +205,46 @@ class OllamaAdapter(OpenAICompatibleAdapter):
 
         from gateway import errors
 
+        if request.stream:
+            events = []
+            with httpx.Client() as client:
+                with client.stream(
+                    "POST",
+                    f"{self.base_url.rstrip('/')}/api/chat",
+                    json={
+                        "model": request.model,
+                        "messages": request.messages,
+                        "options": {"num_predict": request.max_output_tokens},
+                    },
+                    timeout=30.0,
+                ) as response:
+                    if response.status_code != 200:
+                        raise errors.GatewayError("model_error", f"Ollama chat failed with status {response.status_code}.")
+                    final = {}
+                    for line in response.iter_lines():
+                        stripped = line.strip()
+                        if not stripped.startswith("data:"):
+                            continue
+                        data_str = stripped[len("data:"):].strip()
+                        if not data_str:
+                            continue
+                        data = json.loads(data_str)
+                        final = data
+                        content = (data.get("message") or {}).get("content") or ""
+                        if content:
+                            events.append({"type": "token", "text": content})
+                    done_content = "".join(event["text"] for event in events)
+                    usage = final.get("usage") or {}
+                    events.append({
+                        "type": "done",
+                        "content": done_content,
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": usage.get("prompt_eval_count") or 0,
+                            "completion_tokens": usage.get("eval_count") or 0,
+                        },
+                    })
+            return iter(events)
         response = httpx.post(
             f"{self.base_url.rstrip('/')}/api/chat",
             json={
