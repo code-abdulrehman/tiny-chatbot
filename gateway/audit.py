@@ -44,8 +44,8 @@ class AuditLog:
 AUDIT_LOG = AuditLog()
 
 
-def record(event: str, subject: str, detail: Optional[dict] = None) -> AuditEvent:
-    return AUDIT_LOG.record(event, subject, detail)
+def record(event: str, subject: str, detail: Optional[dict] = None, log: Optional[AuditLog] = None) -> AuditEvent:
+    return (log or AUDIT_LOG).record(event, subject, detail)
 
 
 def require_role(principal, role: str) -> bool:

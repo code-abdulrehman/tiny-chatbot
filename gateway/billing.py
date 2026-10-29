@@ -54,5 +54,6 @@ class BillingState:
 BILLING = BillingState()
 
 
-def process_event(event: dict) -> dict:
-    return BILLING.apply(event)
+def process_event(event: dict, state=None) -> dict:
+    effective_state = state or BILLING
+    return effective_state.apply(event)

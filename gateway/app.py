@@ -3,6 +3,10 @@
 from uuid import uuid4
 import json
 
+from uuid import uuid4
+import json
+from time import time
+
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, Request
@@ -14,7 +18,7 @@ from gateway import adapters as adapter_module
 from gateway import auth as auth_module
 from gateway import audit
 from gateway import billing
-from gateway import config, errors, quota, router as router_module
+from gateway import config, errors, quota, router as router_module, stores
 from gateway.errors import GatewayError, gateway_error_handler
 from gateway.auth import Principal
 
@@ -38,7 +42,7 @@ class CreateKeyRequest(BaseModel):
     expires_at: Optional[int] = None
 
 
-def create_app(key_store, dev_api_key: str = "", router=None) -> FastAPI:
+def create_app(key_store, dev_api_key: str = "", router=None, store=None) -> FastAPI:
     app = FastAPI(title="Model Gateway", version="0.1.0", description="Reusable API for a model hosted on one device.")
 
     app.add_exception_handler(GatewayError, gateway_error_handler)
@@ -53,6 +57,7 @@ def create_app(key_store, dev_api_key: str = "", router=None) -> FastAPI:
 
     app.state.key_store = key_store
     app.state.dev_api_key = dev_api_key
+    app.state.store = store if store is not None else stores.GatewayStore()
     app.state.router = router if router is not None else router_module.Router()
     app.state.quota = quota.QuotaLedger()
 
@@ -95,6 +100,9 @@ def create_app(key_store, dev_api_key: str = "", router=None) -> FastAPI:
         if not decision.allowed:
             raise errors.quota_exceeded("The quota for this principal is exhausted.", {"reserved_credits": decision.reserved_credits, "reasons": list(decision.reasons)})
 
+        hold = stores.QuotaHold(hold_id=f"hold_{uuid4().hex}", org_id=principal.org_id, principal_id=principal.principal_id, model=body.model, credits=reservation_cost, state="held", created_at=int(time()))
+        app.state.store.holds.add(hold)
+
         result = adapter.generate(
             adapter_module.GenerateRequest(model=body.model, messages=[m.model_dump() for m in body.messages], max_output_tokens=max_output_tokens, stream=body.stream),
         )
@@ -102,6 +110,8 @@ def create_app(key_store, dev_api_key: str = "", router=None) -> FastAPI:
         final = events[-1]
         usage = adapter.normalize_usage(final)
         app.state.quota.settle(reservation_cost)
+        app.state.store.ledger.append(stores.UsageLedgerEntry(entry_id=f"led_{uuid4().hex}", org_id=principal.org_id, principal_id=principal.principal_id, request_id=request_id, model=body.model, input_tokens=input_tokens, output_tokens=usage.output_tokens, credits=quota.credit_cost(input_tokens, usage.output_tokens, input_weight=1.0, output_weight=2.0), phase="settle"))
+        app.state.store.holds.settle(hold.hold_id, int(time()))
         decision = app.state.quota.evaluate(0, quota.Limits(rolling_credits=config.FREE_CREDITS))
 
         content = final.get("content") or ""
@@ -171,7 +181,7 @@ def create_app(key_store, dev_api_key: str = "", router=None) -> FastAPI:
         if not billing.verify_signature(payload, stripe_signature, config.STRIPE_WEBHOOK_SECRET):
             raise errors.GatewayError("invalid_request", "Stripe webhook signature verification failed.")
         event = json.loads(payload)
-        result = billing.process_event(event)
+        result = billing.process_event(event, state=app.state.store.subscriptions)
         return {"ok": result["ok"], "event": result["event"]}
 
     return app
