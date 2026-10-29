@@ -112,6 +112,37 @@ class GatewayAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
 
+    def test_admin_creates_key_and_new_key_can_chat(self):
+        created = self.client.post("/v1/admin/keys", json={"org_id": "org-1", "principal_id": "user-1", "scopes": ["inference:chat"]}, headers=self.headers)
+        self.assertEqual(created.status_code, 200)
+        body = created.json()
+        self.assertTrue(body["key"].startswith("gk_"))
+        self.assertEqual(body["scopes"], ["inference:chat"])
+        chat = self.client.post("/v1/chat/completions", json={"model": "org-model", "messages": [{"role": "user", "content": "Hello"}], "max_output_tokens": 8}, headers={"Authorization": f"Bearer {body['key']}"})
+        self.assertEqual(chat.status_code, 200)
+
+    def test_admin_endpoints_forbid_non_admin_key(self):
+        self.key_store.add("key-user", "user-secret-key", "org-1", "user-1", ["inference:chat"])
+        response = self.client.post("/v1/admin/keys", json={"org_id": "org-1", "principal_id": "user-1", "scopes": ["inference:chat"]}, headers={"Authorization": "Bearer user-secret-key"})
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["error"]["code"], "forbidden")
+
+    def test_admin_revoke_key_blocks_usage(self):
+        created = self.client.post("/v1/admin/keys", json={"org_id": "org-1", "principal_id": "user-1", "scopes": ["inference:chat"]}, headers=self.headers)
+        key_id = created.json()["id"]
+        self.assertEqual(self.client.post(f"/v1/admin/keys/{key_id}/revoke", headers=self.headers).status_code, 200)
+        chat = self.client.post("/v1/chat/completions", json={"model": "org-model", "messages": [{"role": "user", "content": "Hello"}], "max_output_tokens": 8}, headers={"Authorization": f"Bearer {created.json()['key']}"})
+        self.assertEqual(chat.status_code, 401)
+        self.assertEqual(chat.json()["error"]["code"], "key_revoked")
+
+    def test_admin_suspend_key_blocks_usage(self):
+        created = self.client.post("/v1/admin/keys", json={"org_id": "org-1", "principal_id": "user-1", "scopes": ["inference:chat"]}, headers=self.headers)
+        key_id = created.json()["id"]
+        self.assertEqual(self.client.post(f"/v1/admin/keys/{key_id}/suspend", headers=self.headers).status_code, 200)
+        chat = self.client.post("/v1/chat/completions", json={"model": "org-model", "messages": [{"role": "user", "content": "Hello"}], "max_output_tokens": 8}, headers={"Authorization": f"Bearer {created.json()['key']}"})
+        self.assertEqual(chat.status_code, 403)
+        self.assertEqual(chat.json()["error"]["code"], "account_suspended")
+
 
 if __name__ == "__main__":
     unittest.main()

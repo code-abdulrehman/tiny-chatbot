@@ -65,17 +65,31 @@ class InMemoryKeyStore:
             record.state = "expired"
             audit.record(audit.KEY_EXPIRED, record.key_id or record.principal_id, {"org_id": record.org_id})
             return None
+        if record.state in ("revoked", "suspended"):
+            return record
         if record.state != "active":
             return None
         record.last_used_at = effective_now
         return record
 
-    def revoke(self, key_id: str):
+    def revoke(self, key_id: str) -> bool:
         for record in self._keys.values():
             if record.key_id == key_id:
                 record.state = "revoked"
                 audit.record(audit.KEY_REVOKED, key_id, {"org_id": record.org_id})
-                return
+                return True
+        return False
+
+    def list_keys(self) -> list:
+        return list(self._keys.values())
+
+    def suspend(self, key_id: str) -> bool:
+        for record in self._keys.values():
+            if record.key_id == key_id:
+                record.state = "suspended"
+                audit.record(audit.SUSPENDED, key_id, {"org_id": record.org_id})
+                return True
+        return False
 
 
 def resolve_principal(api_key: str, store: InMemoryKeyStore, dev_api_key: str = "") -> Principal:
@@ -98,4 +112,5 @@ def has_role(principal: Principal, role: str) -> bool:
 
 
 def is_admin(principal: Principal) -> bool:
-    return has_role(principal, "admin")
+    """Admin actions accept the admin role or an admin scope."""
+    return "admin" in principal.scopes or has_role(principal, "admin")

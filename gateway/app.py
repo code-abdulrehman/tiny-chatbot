@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from gateway import adapters as adapter_module
 from gateway import auth as auth_module
+from gateway import audit
 from gateway import config, errors, quota, router as router_module
 from gateway.errors import GatewayError, gateway_error_handler
 from gateway.auth import Principal
@@ -27,6 +28,13 @@ class ChatCompletionRequest(BaseModel):
     messages: list[Message] = Field(..., min_length=1, max_length=40)
     max_output_tokens: int = Field(0, ge=1)
     stream: bool = False
+
+
+class CreateKeyRequest(BaseModel):
+    org_id: str = ""
+    principal_id: str = ""
+    scopes: list[str] = ["inference:chat"]
+    expires_at: Optional[int] = None
 
 
 def create_app(key_store, dev_api_key: str = "", router=None) -> FastAPI:
@@ -121,6 +129,40 @@ def create_app(key_store, dev_api_key: str = "", router=None) -> FastAPI:
     @app.get("/v1/models")
     def models(principal=Depends(get_principal)):
         return {"object": "list", "data": app.state.router.deployments()}
+
+    def require_admin(principal: Principal = Depends(get_principal)) -> Principal:
+        if not auth_module.is_admin(principal):
+            raise errors.forbidden("Admin role is required.")
+        return principal
+
+    @app.post("/v1/admin/keys")
+    def create_key(request: CreateKeyRequest, principal: Principal = Depends(require_admin)):
+        raw_key = f"gk_{uuid4().hex}{uuid4().hex}"
+        record = app.state.key_store.add(
+            f"key-{uuid4().hex[:10]}",
+            raw_key,
+            org_id=request.org_id or principal.org_id,
+            principal_id=request.principal_id,
+            scopes=request.scopes or ["inference:chat"],
+            state="active",
+            expires_at=request.expires_at,
+        )
+        audit.record(audit.KEY_CREATED, record.key_id, {"org_id": record.org_id, "scopes": sorted(record.scopes)})
+        return {"id": record.key_id, "key": raw_key, "org_id": record.org_id, "principal_id": record.principal_id, "scopes": sorted(record.scopes), "expires_at": record.expires_at, "state": record.state}
+
+    @app.get("/v1/admin/keys")
+    def list_keys(principal: Principal = Depends(require_admin)):
+        return {"object": "list", "data": [{"id": record.key_id, "org_id": record.org_id, "principal_id": record.principal_id, "scopes": sorted(record.scopes), "state": record.state, "expires_at": record.expires_at} for record in app.state.key_store.list_keys()]}
+
+    @app.post("/v1/admin/keys/{key_id}/revoke")
+    def revoke_key(key_id: str, principal: Principal = Depends(require_admin)):
+        revoked = app.state.key_store.revoke(key_id)
+        return {"id": key_id, "revoked": revoked}
+
+    @app.post("/v1/admin/keys/{key_id}/suspend")
+    def suspend_key(key_id: str, principal: Principal = Depends(require_admin)):
+        suspended = app.state.key_store.suspend(key_id)
+        return {"id": key_id, "suspended": suspended}
 
     return app
 
