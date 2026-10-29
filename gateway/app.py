@@ -42,7 +42,9 @@ class CreateKeyRequest(BaseModel):
     expires_at: Optional[int] = None
 
 
-def create_app(key_store, dev_api_key: str = "", router=None, store=None) -> FastAPI:
+def create_app(key_store=None, dev_api_key: str = "", router=None, store=None) -> FastAPI:
+    if key_store is None:
+        key_store = auth_module.InMemoryKeyStore()
     app = FastAPI(title="Model Gateway", version="0.1.0", description="Reusable API for a model hosted on one device.")
 
     app.add_exception_handler(GatewayError, gateway_error_handler)
