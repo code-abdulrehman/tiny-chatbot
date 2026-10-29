@@ -3,10 +3,10 @@ import os
 import re
 from hashlib import sha256
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList
 
 DEFAULT_MODEL = 'HuggingFaceTB/SmolLM2-135M-Instruct'
 CACHE_DIR = Path(__file__).resolve().parent / 'models' / 'huggingface'
@@ -95,6 +95,11 @@ class ChatEngine:
         inputs = self.prepare_inputs(history, max_new_tokens, context_tokens, continue_reply)
         streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
         errors = []
+        cancelled = Event()
+
+        class CancelGeneration(StoppingCriteria):
+            def __call__(self, input_ids, scores, **kwargs):
+                return cancelled.is_set()
 
         def generate():
             try:
@@ -102,6 +107,7 @@ class ChatEngine:
                     output = self.model.generate(
                         **inputs, streamer=streamer, max_new_tokens=max_new_tokens,
                         do_sample=sample, repetition_penalty=1.1, use_cache=True,
+                        stopping_criteria=StoppingCriteriaList([CancelGeneration()]),
                         **({'temperature': 0.7, 'top_p': 0.9} if sample else {}),
                         pad_token_id=self.tokenizer.eos_token_id)
                     if generation_status is not None:
@@ -121,6 +127,7 @@ class ChatEngine:
             try:
                 yield from streamer
             finally:
+                cancelled.set()
                 worker.join()
             if errors:
                 raise RuntimeError(f'Generation failed: {errors[0]}') from errors[0]

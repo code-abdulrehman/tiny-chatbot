@@ -117,3 +117,5 @@ Reply length supports up to 1024 tokens per generation. The context budget must 
 Floating up/down arrows at the bottom right scroll smoothly to the first or latest message. They appear only when that direction is useful, run entirely in the browser, and honor reduced-motion preferences. Thread menu buttons use neutral header-style hover feedback.
 
 Continue is a visible button below the latest response in the chat area. During continuation, the existing reply stays rendered while the model loads, then new chunks update the same message in place. The logo uses a fixed brand color that remains readable in both light and dark themes without waiting for a Python rerun.
+
+Replies now continue automatically when a generation chunk hits its token limit, until the model emits an end token. Reply length controls each chunk, not the combined response. If context is exhausted or the model produces no new text, generation pauses with a reason and the manual Continue button remains available. The chat input offers Stop during generation; partial text is retained and can be resumed. Closing the stream signals the CPU generation worker to stop.

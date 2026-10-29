@@ -236,7 +236,12 @@ class ThreadTests(unittest.TestCase):
 
     def test_continue_appends_to_same_reply_without_repeating_user(self):
         at = self.app()
+        calls = 0
         def limited_reply(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                raise ValueError('Context is full')
             kwargs['generation_status']['truncated'] = True
             yield 'First part'
         with patch('chat_engine.ChatEngine.stream', side_effect=limited_reply):
@@ -267,6 +272,36 @@ class ThreadTests(unittest.TestCase):
             at.button(key=f"continue_{original['id']}").click().run()
         self.assertFalse(at.exception)
         self.assertEqual(self.store.load(original['id']), original)
+
+    def test_automatic_continuation_does_not_need_button_click(self):
+        at = self.app()
+        calls = []
+        def reply(history, **kwargs):
+            calls.append(history)
+            kwargs['generation_status']['truncated'] = len(calls) == 1
+            yield 'First' if len(calls) == 1 else ' second.'
+        with patch('chat_engine.ChatEngine.stream', side_effect=reply):
+            at.chat_input[0].set_value('Explain lists').run()
+        self.assertFalse(at.exception)
+        messages = at.session_state['active_chat']['messages']
+        self.assertEqual(messages[-1]['content'], 'First second.')
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(calls[1][-1]['content'], 'First')
+        self.assertFalse(messages[-1]['truncated'])
+
+    def test_stop_preserves_partial_reply(self):
+        from streamlit.runtime.scriptrunner_utils.exceptions import StopException
+        at = self.app()
+        def interrupted(*args, **kwargs):
+            yield 'Kept partial reply'
+            raise StopException()
+        with patch('chat_engine.ChatEngine.stream', side_effect=interrupted):
+            at.chat_input[0].set_value('Explain lists').run()
+        self.assertFalse(at.exception)
+        partial = self.store.load(at.session_state['active_chat']['id'])
+        self.assertEqual(partial['messages'][-1]['content'], 'Kept partial reply')
+        self.assertTrue(partial['messages'][-1]['truncated'])
+        self.assertIn('stopped', partial['messages'][-1]['pause_reason'])
 
     def test_long_reply_setting_is_saved(self):
         at = self.app()

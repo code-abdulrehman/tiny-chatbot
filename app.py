@@ -21,6 +21,7 @@ from chat_store import ChatStore, new_thread, REPLY_LENGTHS
 from message_actions import copy_message
 from message_time import timestamp_now, display_time
 from scroll_controls import conversation_scroll_controls
+from auto_reply import complete_reply
 
 st.set_page_config(page_title='Tiny Chat', page_icon='💬', layout='centered')
 logo = (Path(__file__).resolve().parent / 'assets' / 'logo.svg').read_text()
@@ -236,7 +237,7 @@ for index, message in enumerate(visible_messages):
         message_footer(message, active['id'], index,
                        allow_retry=not (retrying or continuing) and index == len(active['messages']) - 1 and message['role'] == 'assistant')
         if message.get('truncated') and index == len(active['messages']) - 1:
-            st.caption('Reply reached its length limit. Use Continue to finish it.')
+            st.caption(message.get('pause_reason') or 'Reply paused. Use Continue to finish it.')
 if active['messages'] and active['messages'][-1]['role'] == 'assistant' and not (retrying or continuing):
     with st.container(horizontal=True, horizontal_alignment='right'):
         st.button('Continue', icon=':material/last_page:', key=f"continue_{active['id']}",
@@ -249,7 +250,7 @@ if st.session_state.get('last_reply'):
 with st.container(key='chat_scroll_controls', width='content'):
     conversation_scroll_controls()
 
-prompt = st.chat_input('Message Tiny Chat', max_chars=2000, submit_mode='disable')
+prompt = st.chat_input('Message Tiny Chat', max_chars=2000, submit_mode='stop')
 if prompt or retrying or continuing:
     history = (active['messages'] if continuing else active['messages'][:-1] if retrying else
                active['messages'] + [{'role': 'user', 'content': prompt, 'timestamp': timestamp_now()}])
@@ -270,21 +271,33 @@ if prompt or retrying or continuing:
                 settings = st.session_state.settings
                 with st.spinner('Continuing reply…' if continuing else 'Loading model…'):
                     engine = load_engine(settings['quantized'], settings['offline'], engine_revision)
-                stream = engine.stream(history, max_new_tokens=settings['tokens'], context_tokens=settings['context_tokens'],
-                                       sample=retrying, continue_reply=continuing, generation_status=generation_status)
-                if continuing:
-                    answer = history[-1]['content']
+                stream = complete_reply(engine, history, max_new_tokens=settings['tokens'], context_tokens=settings['context_tokens'],
+                                        sample=retrying, continuing=continuing, status=generation_status)
+                answer = history[-1]['content'] if continuing else ''
+                output = continuation_placeholder if continuing else st.empty()
+                try:
                     for chunk in stream:
-                        if chunk:
-                            answer += chunk
-                            continuation_placeholder.markdown(answer)
-                else:
-                    answer = st.write_stream(stream)
+                        answer += chunk
+                        output.markdown(answer)
+                except BaseException as exc:
+                    # Keep the text already shown when Streamlit's Stop interrupts.
+                    if not isinstance(exc, Exception) and answer.strip():
+                        partial = {**active, 'messages': (history[:-1] if continuing else history) + [
+                            {'role': 'assistant', 'content': answer, 'timestamp': timestamp_now(),
+                             'truncated': True, 'pause_reason': 'Generation stopped. Use Continue to resume.'}]}
+                        if not partial['private']:
+                            store.save(partial)
+                        st.session_state.active_chat = partial
+                        update_chat_url(partial)
+                    raise
+                finally:
+                    stream.close()
             if not answer.strip():
                 answer = "I couldn't produce a reply. Please rephrase your question."
                 st.markdown(answer)
             updated = {**active, 'messages': (history[:-1] if continuing else history) + [
-                {'role': 'assistant', 'content': answer, 'timestamp': timestamp_now(), 'truncated': generation_status.get('truncated', False)}]}
+                {'role': 'assistant', 'content': answer, 'timestamp': timestamp_now(),
+                 'truncated': generation_status.get('truncated', False), 'pause_reason': generation_status.get('pause_reason')}]}
             if not active['messages'] and not updated['private']:
                 try:
                     settings = st.session_state.settings
