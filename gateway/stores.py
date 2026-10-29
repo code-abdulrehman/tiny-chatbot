@@ -1,7 +1,17 @@
 """Gateway database tier: stores and in-memory implementations."""
 
+import json
 from dataclasses import dataclass
+from hashlib import sha256
+from time import time
 from typing import Optional
+
+import asyncpg
+from uuid import uuid4 as _uuid4
+
+
+def uuid4_hex() -> str:
+    return _uuid4().hex
 
 
 @dataclass
@@ -209,3 +219,129 @@ class GatewayStore:
         self.ledger = UsageLedger()
         self.audit = AuditEvents()
         self.subscriptions = Subscriptions()
+
+
+class PostgresQuotaHolds:
+    """Async PostgreSQL quota holds (backend for `backend = postgres`)."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def add(self, hold: QuotaHold) -> QuotaHold:
+        await self.connection.execute(
+            "INSERT INTO quota_holds (hold_id, org_id, principal_id, model, credits, state, created_at, settled_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            hold.hold_id, hold.org_id, hold.principal_id, hold.model, hold.credits, hold.state, hold.created_at, hold.settled_at,
+        )
+        return hold
+
+    async def settle(self, hold_id: str, settled_at: int) -> bool:
+        result = await self.connection.execute(
+            "UPDATE quota_holds SET state = 'settled', settled_at = $2 WHERE hold_id = $1 AND state = 'held'",
+            hold_id, settled_at,
+        )
+        return (result or 0) > 0
+
+    async def release(self, hold_id: str, released_at: int) -> bool:
+        result = await self.connection.execute(
+            "UPDATE quota_holds SET state = 'released', settled_at = $2 WHERE hold_id = $1 AND state = 'held'",
+            hold_id, released_at,
+        )
+        return (result or 0) > 0
+
+    async def list(self, org_id: str = "", principal_id: str = "", model: str = "") -> list:
+        rows = await self.connection.fetch("SELECT hold_id, org_id, principal_id, model, credits, state, created_at, settled_at FROM quota_holds")
+        return [
+            QuotaHold(
+                hold_id=row["hold_id"], org_id=row["org_id"], principal_id=row["principal_id"],
+                model=row["model"], credits=row["credits"], state=row["state"],
+                created_at=row["created_at"], settled_at=row["settled_at"],
+            )
+            for row in rows
+            if (not org_id or row["org_id"] == org_id) and (not principal_id or row["principal_id"] == principal_id) and (not model or row["model"] == model)
+        ]
+
+
+class PostgresUsageLedger:
+    """Async PostgreSQL append-only usage ledger."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def append(self, entry: UsageLedgerEntry) -> UsageLedgerEntry:
+        await self.connection.execute(
+            "INSERT INTO usage_ledger (entry_id, org_id, principal_id, request_id, model, input_tokens, output_tokens, credits, phase, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            entry.entry_id, entry.org_id, entry.principal_id, entry.request_id, entry.model, entry.input_tokens, entry.output_tokens, entry.credits, entry.phase, entry.created_at,
+        )
+        return entry
+
+    async def list(self, org_id: str = "") -> list:
+        rows = await self.connection.fetch("SELECT entry_id, org_id, principal_id, request_id, model, input_tokens, output_tokens, credits, phase, created_at FROM usage_ledger")
+        return [
+            UsageLedgerEntry(
+                entry_id=row["entry_id"], org_id=row["org_id"], principal_id=row["principal_id"], request_id=row["request_id"],
+                model=row["model"], input_tokens=row["input_tokens"], output_tokens=row["output_tokens"],
+                credits=row["credits"], phase=row["phase"], created_at=row["created_at"],
+            )
+            for row in rows
+            if not org_id or row["org_id"] == org_id
+        ]
+
+
+class PostgresAuditEvents:
+    """Async PostgreSQL audit event trail."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def record(self, event: str, subject: str, detail=None) -> AuditEventRecord:
+        entry = AuditEventRecord(id=f"evt_{uuid4_hex()}", event=event, subject=subject, detail=detail, timestamp=int(time()))
+        await self.connection.execute(
+            "INSERT INTO audit_events (event_id, event, subject, detail, created_at) VALUES ($1, $2, $3, $4, $5)",
+            entry.id, event, subject, json.dumps(detail or {}), entry.timestamp,
+        )
+        return entry
+
+    async def list(self, subject: Optional[str] = None) -> list:
+        rows = await self.connection.fetch("SELECT event_id, event, subject, detail, created_at FROM audit_events")
+        events = [
+            AuditEventRecord(id=row["event_id"], event=row["event"], subject=row["subject"], detail=row["detail"], timestamp=row["created_at"])
+            for row in rows
+        ]
+        if subject is None:
+            return events
+        return [entry for entry in events if entry.subject == subject]
+
+
+class PostgresSubscriptions:
+    """Async PostgreSQL subscription/entitlement state."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def apply(self, event: dict) -> dict:
+        event_type = event.get("type")
+        obj = (event.get("data") or {}).get("object") or {}
+        result = {"ok": True, "event": event_type, "subscription": obj.get("id")}
+        if event_type in ("customer.subscription.created", "customer.subscription.updated"):
+            items = obj.get("items") or [{}]
+            price = (items[0] or {}).get("price") or {}
+            await self.connection.execute(
+                "INSERT INTO subscriptions (subscription_id, org_id, status, plan_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (subscription_id) DO UPDATE SET status = EXCLUDED.status, plan_id = EXCLUDED.plan_id",
+                obj.get("id"), obj.get("org_id") or "org_unknown", obj.get("status") or "active", price.get("id"), int(time()),
+            )
+        elif event_type == "customer.subscription.deleted":
+            await self.connection.execute(
+                "INSERT INTO subscriptions (subscription_id, org_id, status, plan_id, created_at) VALUES ($1, $2, 'cancelled', $3, $4) ON CONFLICT (subscription_id) DO UPDATE SET status = EXCLUDED.status, plan_id = EXCLUDED.plan_id",
+                obj.get("id"), obj.get("org_id") or "org_unknown", obj.get("plan_id"), int(time()),
+            )
+        return result
+
+    async def get(self, subscription_id: str):
+        row = await self.connection.fetchrow("SELECT subscription_id, org_id, status, plan_id, created_at FROM subscriptions WHERE subscription_id = $1", subscription_id)
+        if row is None:
+            return None
+        return {"subscription_id": row["subscription_id"], "org_id": row["org_id"], "status": row["status"], "plan_id": row["plan_id"], "created_at": row["created_at"]}
+
+
+def uuid4_hex() -> str:
+    return _uuid4().hex

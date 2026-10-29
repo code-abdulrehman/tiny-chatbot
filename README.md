@@ -2,6 +2,8 @@
 
 For the separate browser-only edition with on-device Qwen2.5 inference and browser-local chats, see [browser/README.md](browser/README.md).
 
+For a proposed multi-user gateway that connects models hosted on one device or remotely, with accounts, plans, token quotas, API keys, guardrails, and audit logs, see [docs/model-gateway-architecture.md](docs/model-gateway-architecture.md).
+
 This folder is a standalone project. Run all commands below from this folder; the parent `kaggle/` directory is not needed after cloning.
 
 ## First run
