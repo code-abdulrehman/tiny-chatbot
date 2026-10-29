@@ -1,22 +1,23 @@
 import './styles.css';
 import { loadThreads, saveThreads, loadSettings, saveSettings, newThread, routeFor } from './storage.js';
+import { createElement, ArrowUp, Bot, Check, Clock, Copy, EllipsisVertical, Lock, Menu, MessageSquare, Pencil, Play, Plus, RotateCcw, Search, Settings, Square, Trash2, User } from 'lucide';
 
 const root = document.querySelector('#app');
 root.innerHTML = `
   <aside class="sidebar">
-    <header class="brand"><span class="brand-icon">▣</span><strong>Tiny Chat</strong><span class="brand-tag">Browser</span></header>
-    <button id="new-chat" class="primary">＋ New chat</button>
-    <label class="private-row"><span>Private chat</span><input id="private-toggle" type="checkbox" role="switch"></label>
-    <input id="search" class="search" type="search" placeholder="Search chats" aria-label="Search chats">
+    <header class="brand"><img class="brand-icon" src="./favicon.svg" alt="" width="30" height="30"><strong>Tiny Chat</strong><span class="brand-tag">Browser</span></header>
+    <button id="new-chat" class="primary">New chat</button>
+    <label class="private-row"><span id="private-label">Private chat</span><input id="private-toggle" type="checkbox" role="switch"></label>
+    <div class="search-wrap"><input id="search" class="search" type="search" placeholder="Search chats" aria-label="Search chats"></div>
     <nav id="threads" aria-label="Saved chats"></nav>
-    <button id="settings-button" class="settings-button">⚙ Settings</button>
+    <button id="settings-button" class="settings-button">Settings</button>
   </aside>
   <main class="main">
-    <header class="topbar"><button id="mobile-menu" aria-label="Toggle sidebar">☰</button><span id="model-status">Model loads on first message</span></header>
+    <header class="topbar"><button id="mobile-menu" aria-label="Toggle sidebar"></button><span id="model-status">Model loads on first message</span></header>
     <section id="messages" class="messages" aria-live="polite"></section>
     <div class="composer-wrap">
       <button id="continue-button" class="continue-button" hidden>Continue reply</button>
-      <form id="composer"><textarea id="prompt" rows="1" placeholder="Message Tiny Chat" aria-label="Message Tiny Chat"></textarea><button id="send" type="submit" aria-label="Send message">↑</button><button id="stop" type="button" hidden>Stop</button></form>
+      <form id="composer"><textarea id="prompt" rows="1" placeholder="Message Tiny Chat" aria-label="Message Tiny Chat"></textarea><button id="send" type="submit" aria-label="Send message"></button><button id="stop" type="button" aria-label="Stop generating" hidden>Stop</button></form>
       <p class="hint">Runs on your device · Chats stay in this browser · AI can make mistakes</p>
     </div>
   </main>
@@ -24,6 +25,20 @@ root.innerHTML = `
 `;
 
 const $ = (selector) => root.querySelector(selector);
+const icon = (definition, className = 'ui-icon') => {
+  const svg = createElement(definition);
+  svg.classList.add(className);
+  svg.setAttribute('aria-hidden', 'true');
+  return svg;
+};
+$('#new-chat').prepend(icon(Plus));
+$('#private-label').prepend(icon(Lock));
+$('.search-wrap').prepend(icon(Search));
+$('#settings-button').prepend(icon(Settings));
+$('#mobile-menu').append(icon(Menu));
+$('#continue-button').prepend(icon(Play));
+$('#send').append(icon(ArrowUp));
+$('#stop').prepend(icon(Square));
 const store = window.localStorage;
 const state = {
   threads: loadThreads(store),
@@ -75,25 +90,28 @@ function renderThreads() {
     row.className = 'thread-row';
     const open = document.createElement('button');
     open.className = 'thread-open' + (thread.id === state.current?.id ? ' active' : '');
-    open.textContent = `▢  ${thread.title}`;
+    const title = document.createElement('span');
+    title.className = 'thread-title';
+    title.textContent = thread.title;
+    open.append(icon(MessageSquare), title);
     open.title = thread.title;
     open.addEventListener('click', () => setCurrent(thread));
     const menu = document.createElement('details');
     menu.className = 'thread-menu';
     const summary = document.createElement('summary');
-    summary.textContent = '⋮';
+    summary.append(icon(EllipsisVertical));
     summary.setAttribute('aria-label', `Actions for ${thread.title}`);
     menu.append(summary);
-    for (const [label, action] of [
-      ['Rename', () => {
+    for (const [label, actionIcon, action] of [
+      ['Rename', Pencil, () => {
         const title = prompt('Chat title', thread.title)?.trim();
         if (title) { thread.title = title.slice(0, 48); thread.customTitle = true; persistThread(thread); }
       }],
-      ['Duplicate', () => {
+      ['Duplicate', Copy, () => {
         const copy = { ...structuredClone(thread), id: crypto.randomUUID(), title: `${thread.title} (copy)`, updatedAt: new Date().toISOString() };
         state.threads.unshift(copy); saveThreads(store, state.threads); setCurrent(copy);
       }],
-      ['Delete', () => {
+      ['Delete', Trash2, () => {
         if (!confirm(`Delete “${thread.title}”?`)) return;
         state.threads = state.threads.filter((t) => t.id !== thread.id);
         saveThreads(store, state.threads);
@@ -102,7 +120,7 @@ function renderThreads() {
       }],
     ]) {
       const button = document.createElement('button');
-      button.textContent = label;
+      button.append(icon(actionIcon), document.createTextNode(label));
       button.addEventListener('click', (event) => { event.stopPropagation(); menu.open = false; action(); });
       menu.append(button);
     }
@@ -122,7 +140,7 @@ function messageElement(message, lastAssistant) {
   article.className = `message ${message.role}`;
   const avatar = document.createElement('span');
   avatar.className = 'avatar';
-  avatar.textContent = message.role === 'user' ? '●' : '✦';
+  avatar.append(icon(message.role === 'user' ? User : Bot));
   const body = document.createElement('div');
   body.className = 'message-body';
   const content = document.createElement('div');
@@ -134,22 +152,22 @@ function messageElement(message, lastAssistant) {
   actions.className = 'message-actions';
   if (message.role === 'assistant') {
     const copy = document.createElement('button');
-    copy.textContent = 'Copy';
+    copy.append(icon(Copy), document.createTextNode('Copy'));
     copy.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(message.content); copy.textContent = 'Copied'; }
-      catch { copy.textContent = 'Copy failed'; }
+      try { await navigator.clipboard.writeText(message.content); copy.replaceChildren(icon(Check), document.createTextNode('Copied')); }
+      catch { copy.replaceChildren(icon(Copy), document.createTextNode('Copy failed')); }
     });
     actions.append(copy);
     if (lastAssistant && !state.busy) {
       const retry = document.createElement('button');
-      retry.textContent = 'Retry';
+      retry.append(icon(RotateCcw), document.createTextNode('Retry'));
       retry.addEventListener('click', retryLast);
       actions.append(retry);
     }
   }
   const time = document.createElement('time');
   time.dateTime = message.timestamp;
-  time.textContent = new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  time.append(icon(Clock), document.createTextNode(new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })));
   footer.append(actions, time);
   body.append(content, footer);
   article.append(avatar, body);
@@ -162,7 +180,7 @@ function renderMessages() {
   if (!state.current.messages.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.innerHTML = '<h1>Tiny Chat</h1><p>Private, on-device conversations with a small AI model.</p>';
+    empty.innerHTML = '<div class="empty-title"><img src="./favicon.svg" alt=""><h1>Tiny Chat</h1></div><p>Private, on-device conversations with a small AI model.</p>';
     container.append(empty);
   } else {
     const last = state.current.messages.length - 1;

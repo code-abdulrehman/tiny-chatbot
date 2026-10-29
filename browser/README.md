@@ -2,6 +2,8 @@
 
 This is a separate browser-only edition of Tiny Chat. The existing Streamlit app in the parent directory still works. Model inference runs in a Web Worker on the visitor's device. The model is downloaded from Hugging Face to the browser cache; no model weights are committed to Git. Saved chats and settings use that browser's `localStorage`. Private chats stay in memory until the tab is closed or another chat is opened. No chats are sent to the app host, but prompts and replies are processed by the model in the browser. The browser contacts Hugging Face to download model files.
 
+The interface uses locally bundled [Lucide](https://lucide.dev/) SVG icons. The app logo and favicon are included in `public/favicon.svg`.
+
 ## Run locally
 
 Install Node.js 20.19+ and npm, then:
