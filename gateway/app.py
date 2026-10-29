@@ -65,6 +65,24 @@ def create_app(key_store=None, dev_api_key: str = "", router=None, store=None, b
     app.state.router = router if router is not None else router_module.Router()
     app.state.quota = quota.QuotaLedger()
 
+    if app.state.backend == "postgres" and app.state.pg is None:
+        @app.on_event("startup")
+        async def _connect_postgres():
+            import asyncpg
+
+            url = config.DATABASE_URL
+            if url.startswith("postgresql+psycopg://"):
+                url = "postgresql://" + url[len("postgresql+psycopg://"):]
+            elif url.startswith("postgresql+asyncpg://"):
+                url = "postgresql://" + url[len("postgresql+asyncpg://"):]
+            app.state.pg = await asyncpg.connect(url)
+
+        @app.on_event("shutdown")
+        async def _disconnect_postgres():
+            if app.state.pg is not None:
+                await app.state.pg.close()
+                app.state.pg = None
+
     def get_principal(authorization: str = Header(default="")) -> Principal:
         scheme, _, credentials = authorization.partition(" ")
         if scheme.lower() != "bearer" or not credentials.strip():
@@ -104,11 +122,16 @@ def create_app(key_store=None, dev_api_key: str = "", router=None, store=None, b
         if not decision.allowed:
             raise errors.quota_exceeded("The quota for this principal is exhausted.", {"reserved_credits": decision.reserved_credits, "reasons": list(decision.reasons)})
 
+        hold_id = f"hold_{uuid4().hex}"
+        req_id = f"req_{uuid4().hex}"
+        now = int(time())
+        expires_at = now + getattr(config, "SESSION_TTL_SECONDS", 3600)
         if app.state.backend == "postgres" and app.state.pg is not None:
-            hold = stores.QuotaHold(hold_id=f"hold_{uuid4().hex}", org_id=principal.org_id, principal_id=principal.principal_id, model=body.model, credits=reservation_cost, state="held", created_at=int(time()))
+            await stores.ensure_request_context(app.state.pg, principal.org_id, principal.principal_id, req_id, model=body.model, input_tokens=input_tokens, max_output_tokens=max_output_tokens, key_id=principal.key_id if principal.key_id != "dev" else None)
+            hold = stores.QuotaHold(hold_id=hold_id, org_id=principal.org_id, principal_id=principal.principal_id, request_id=req_id, model=body.model, credits=reservation_cost, state="held", created_at=now, expires_at=expires_at)
             await stores.PostgresQuotaHolds(app.state.pg).add(hold)
         else:
-            hold = stores.QuotaHold(hold_id=f"hold_{uuid4().hex}", org_id=principal.org_id, principal_id=principal.principal_id, model=body.model, credits=reservation_cost, state="held", created_at=int(time()))
+            hold = stores.QuotaHold(hold_id=hold_id, org_id=principal.org_id, principal_id=principal.principal_id, request_id=req_id, model=body.model, credits=reservation_cost, state="held", created_at=now, expires_at=expires_at)
             app.state.store.holds.add(hold)
 
         result = adapter.generate(
@@ -118,10 +141,11 @@ def create_app(key_store=None, dev_api_key: str = "", router=None, store=None, b
         final = events[-1]
         usage = adapter.normalize_usage(final)
         app.state.quota.settle(reservation_cost)
-        usage_entry = stores.UsageLedgerEntry(entry_id=f"led_{uuid4().hex}", org_id=principal.org_id, principal_id=principal.principal_id, request_id=request_id, model=body.model, input_tokens=input_tokens, output_tokens=usage.output_tokens, credits=quota.credit_cost(input_tokens, usage.output_tokens, input_weight=1.0, output_weight=2.0), phase="settle")
+        usage_entry = stores.UsageLedgerEntry(entry_id=f"led_{uuid4().hex}", org_id=principal.org_id, principal_id=principal.principal_id, request_id=req_id, model=body.model, input_tokens=input_tokens, output_tokens=usage.output_tokens, credits=quota.credit_cost(input_tokens, usage.output_tokens, input_weight=1.0, output_weight=2.0), phase="settle", usage_source="model")
         if app.state.backend == "postgres" and app.state.pg is not None:
             await stores.PostgresUsageLedger(app.state.pg).append(usage_entry)
             await stores.PostgresQuotaHolds(app.state.pg).settle(hold.hold_id, int(time()))
+            await stores.PostgresRequests(app.state.pg).set_state(principal.org_id, req_id, "completed", int(time()))
         else:
             app.state.store.ledger.append(usage_entry)
             app.state.store.holds.settle(hold.hold_id, int(time()))
