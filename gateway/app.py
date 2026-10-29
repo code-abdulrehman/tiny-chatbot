@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from gateway import adapters as adapter_module
 from gateway import auth as auth_module
-from gateway import config, errors, quota
+from gateway import config, errors, quota, router as router_module
 from gateway.errors import GatewayError, gateway_error_handler
 from gateway.auth import Principal
 
@@ -29,7 +29,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
 
 
-def create_app(key_store, dev_api_key: str = "", adapters: dict = None) -> FastAPI:
+def create_app(key_store, dev_api_key: str = "", router=None) -> FastAPI:
     app = FastAPI(title="Model Gateway", version="0.1.0", description="Reusable API for a model hosted on one device.")
 
     app.add_exception_handler(GatewayError, gateway_error_handler)
@@ -44,7 +44,7 @@ def create_app(key_store, dev_api_key: str = "", adapters: dict = None) -> FastA
 
     app.state.key_store = key_store
     app.state.dev_api_key = dev_api_key
-    app.state.adapters = adapters if adapters is not None else {}
+    app.state.router = router if router is not None else router_module.Router()
     app.state.quota = quota.QuotaLedger()
 
     def get_principal(authorization: str = Header(default="")) -> Principal:
@@ -54,10 +54,7 @@ def create_app(key_store, dev_api_key: str = "", adapters: dict = None) -> FastA
         return auth_module.resolve_principal(credentials.strip(), key_store, dev_api_key)
 
     def resolve_adapter(model: str):
-        adapter = app.state.adapters.get(model)
-        if adapter is None:
-            raise errors.GatewayError("model_not_found", f"No registered deployment for model {model}.")
-        return adapter
+        return app.state.router.resolve(model)
 
     @app.get("/health")
     def health():
@@ -123,13 +120,7 @@ def create_app(key_store, dev_api_key: str = "", adapters: dict = None) -> FastA
 
     @app.get("/v1/models")
     def models(principal=Depends(get_principal)):
-        return {
-            "object": "list",
-            "data": [
-                {"id": f"{adapter.describe().model}@{adapter.describe().version}", "capabilities": sorted(adapter.describe().capabilities), "context_window": adapter.describe().context_window}
-                for adapter in app.state.adapters.values()
-            ],
-        }
+        return {"object": "list", "data": app.state.router.deployments()}
 
     return app
 

@@ -7,7 +7,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 
-from gateway import adapters, app as gateway_app, auth, config, errors, quota
+from gateway import adapters, app as gateway_app, auth, config, errors, quota, router as router_module
 
 
 class FakeAdapter(adapters.Adapter):
@@ -39,7 +39,9 @@ class FakeAdapter(adapters.Adapter):
 class GatewayAppTests(unittest.TestCase):
     def setUp(self):
         self.key_store = auth.InMemoryKeyStore()
-        self.app = gateway_app.create_app(self.key_store, dev_api_key="dev-key", adapters={"org-model": FakeAdapter()})
+        self.router = router_module.Router()
+        self.router.register(FakeAdapter(), host_id="host-org-model")
+        self.app = gateway_app.create_app(self.key_store, dev_api_key="dev-key", router=self.router)
         self.client = TestClient(self.app)
         self.headers = {"Authorization": "Bearer dev-key"}
 
@@ -76,26 +78,27 @@ class GatewayAppTests(unittest.TestCase):
         self.assertEqual(body["quota"]["reserved_credits"], 0)
 
     def test_context_limit_exceeded(self):
-        self.app.state.adapters["org-model"] = FakeAdapter(context_window=8)
+        self.app.state.router.register(FakeAdapter(context_window=8), host_id="host-org-model")
         response = self.client.post("/v1/chat/completions", json={"model": "org-model", "messages": [{"role": "user", "content": "Hello"}], "max_output_tokens": 64}, headers=self.headers)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"]["code"], "context_limit_exceeded")
 
     def test_unsupported_capability(self):
-        self.app.state.adapters["org-model"] = FakeAdapter(capabilities=frozenset())
+        self.app.state.router.register(FakeAdapter(capabilities=frozenset()), host_id="host-org-model")
         response = self.client.post("/v1/chat/completions", json={"model": "org-model", "messages": [{"role": "user", "content": "Hello"}]}, headers=self.headers)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"]["code"], "unsupported_capability")
 
     def test_model_error_maps_to_gateway_error(self):
-        self.app.state.adapters["org-model"] = FakeAdapter()
-        self.app.state.adapters["org-model"].generate = lambda request, cancellation=None: (_ for _ in ()).throw(errors.GatewayError("model_error", "Upstream failed."))
+        self.app.state.router.register(FakeAdapter(), host_id="host-org-model")
+        adapter = self.app.state.router.resolve("org-model")
+        adapter.generate = lambda request, cancellation=None: (_ for _ in ()).throw(errors.GatewayError("model_error", "Upstream failed."))
         response = self.client.post("/v1/chat/completions", json={"model": "org-model", "messages": [{"role": "user", "content": "Hello"}], "max_output_tokens": 64}, headers=self.headers)
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["error"]["code"], "model_error")
 
     def test_quota_exceeded_after_limit_is_reached(self):
-        self.app = gateway_app.create_app(self.key_store, dev_api_key="dev-key", adapters={"org-model": FakeAdapter()})
+        self.app = gateway_app.create_app(self.key_store, dev_api_key="dev-key", router=self.router)
         client = TestClient(self.app)
         first = client.post("/v1/chat/completions", json={"model": "org-model", "messages": [{"role": "user", "content": "Hello"}], "max_output_tokens": 64}, headers={"Authorization": "Bearer dev-key"})
         self.assertEqual(first.status_code, 200)
