@@ -14,6 +14,7 @@ GATEWAY_ERROR_STATUS = {
     "unauthenticated": 401,
     "forbidden": 403,
     "key_revoked": 401,
+    "key_expired": 401,
     "account_suspended": 403,
     "idempotency_conflict": 409,
     "deployment_changed": 409,
@@ -75,6 +76,10 @@ def forbidden(message="The principal is not allowed to perform this action."):
 
 def key_revoked(message="This API key has been revoked."):
     return GatewayError("key_revoked", message)
+
+
+def key_expired(message="This API key has expired."):
+    return GatewayError("key_expired", message)
 
 
 def account_suspended(message="This account is suspended."):
