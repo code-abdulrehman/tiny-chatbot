@@ -1,5 +1,7 @@
 # Tiny local chat
 
+For the separate browser-only edition with on-device Qwen2.5 inference and browser-local chats, see [browser/README.md](browser/README.md).
+
 This folder is a standalone project. Run all commands below from this folder; the parent `kaggle/` directory is not needed after cloning.
 
 ## First run
