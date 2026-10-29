@@ -1,5 +1,5 @@
 import './styles.css';
-import { DEFAULT_SYSTEM_PROMPT, loadThreads, saveThreads, loadSettings, saveSettings, newThread, routeFor } from './storage.js';
+import { loadThreads, saveThreads, newThread, routeFor } from './storage.js';
 import { DEFAULT_GATEWAY_API_KEY, DEFAULT_GATEWAY_BASE_URL, DEFAULT_GATEWAY_MODEL, createGatewayChat, loadGatewaySettings, saveGatewaySettings } from './gateway.js';
 import { createElement, ArrowUp, Bot, Check, Clock, Copy, EllipsisVertical, Lock, Menu, MessageSquare, Pencil, Play, Plus, RotateCcw, Search, Settings, Square, Trash2, User } from 'lucide';
 import { marked } from 'marked';
@@ -16,18 +16,21 @@ root.innerHTML = `
     <button id="settings-button" class="settings-button">Settings</button>
   </aside>
   <main class="main">
-    <header class="topbar"><button id="mobile-menu" aria-label="Toggle sidebar"></button><span id="model-status">Model loads on first message</span></header>
+    <header class="topbar"><button id="mobile-menu" aria-label="Toggle sidebar"></button><span id="model-status">Gateway not configured</span></header>
     <section id="messages" class="messages" aria-live="polite"></section>
     <div class="composer-wrap">
       <button id="continue-button" class="continue-button" hidden>Continue reply</button>
       <form id="composer"><textarea id="prompt" rows="1" placeholder="Message Tiny Chat" aria-label="Message Tiny Chat"></textarea><button id="send" type="submit" aria-label="Send message"></button><button id="stop" type="button" aria-label="Stop generating" hidden>Stop</button></form>
-      <p class="hint">Runs on your device · Chats stay in this browser · AI can make mistakes</p>
+      <p class="hint">Replies come from the configured gateway · Chats stay in this browser · AI can make mistakes</p>
     </div>
   </main>
-  <dialog id="settings-dialog"><form method="dialog"><h2>Chat settings</h2><p class="model-name">onnx-community/Qwen2.5-0.5B-Instruct</p><label>Reply length (tokens)<select id="reply-tokens"><option>64</option><option>128</option><option>256</option></select></label><label>Recent context messages<select id="context-messages"><option>4</option><option>10</option><option>20</option></select></label><label>System prompt<textarea id="system-prompt" rows="6" maxlength="1200" spellcheck="true"></textarea></label><div class="prompt-help"><span>Applies to future replies in all chats.</span><button id="reset-system-prompt" type="button">Reset to default</button></div><p class="note">First load downloads model weights to your browser. WebGPU uses q4f16; CPU fallback uses q8. Chats are saved only in browser storage.</p>
-  <label>Gateway base URL<input id="gateway-base-url" type="text" placeholder="http://127.0.0.1:8080" /></label>
-  <label>Gateway API key<input id="gateway-api-key" type="password" placeholder="Optional · Bearer key" /></label>
+  <dialog id="settings-dialog"><form method="dialog"><h2>Gateway settings</h2>
+  <label>Gateway base URL<input id="gateway-base-url" type="url" placeholder="http://127.0.0.1:8080" /></label>
+  <label>Gateway API key<input id="gateway-api-key" type="password" placeholder="Bearer key" autocomplete="off" /></label>
   <label>Gateway model<input id="gateway-model" type="text" placeholder="org-model" /></label>
+  <label>Reply length (tokens)<select id="reply-tokens"><option>64</option><option>128</option><option>256</option></select></label>
+  <label>Recent context messages<select id="context-messages"><option>4</option><option>10</option><option>20</option></select></label>
+  <p class="note">Chat history stays in this browser. Prompts and replies pass through the gateway to the selected model host. This key is kept for this tab only.</p>
   <menu><button value="cancel">Cancel</button><button id="save-settings" value="save" class="primary">Save</button></menu></form></dialog>
 `;
 
@@ -64,14 +67,12 @@ $('#stop').prepend(icon(Square));
 const store = window.localStorage;
 const state = {
   threads: loadThreads(store),
-  settings: loadSettings(store),
+  settings: { replyTokens: 128, contextMessages: 10 },
   current: null,
   busy: false,
   task: null,
-  worker: null,
-  queuedTitle: false,
-  status: 'Model loads on first message',
-  gateway: loadGatewaySettings(store),
+  status: 'Gateway not configured',
+  gateway: loadGatewaySettings(store, window.sessionStorage),
 };
 
 function persist() {
@@ -203,7 +204,7 @@ function renderMessages() {
   if (!state.current.messages.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.innerHTML = '<div class="empty-title"><img src="./favicon.svg" alt=""><h1>Tiny Chat</h1></div><p>Private, on-device conversations with a small AI model.</p>';
+    empty.innerHTML = '<div class="empty-title"><img src="./favicon.svg" alt=""><h1>Tiny Chat</h1></div><p>Gateway powered conversations. Chat history stays in this browser.</p>';
     container.append(empty);
   } else {
     const last = state.current.messages.length - 1;
@@ -224,14 +225,6 @@ function setBusy(busy) {
   renderMessages();
 }
 
-function getWorker() {
-  if (state.worker) return state.worker;
-  state.worker = new Worker(new URL('./model-worker.js', import.meta.url), { type: 'module' });
-  state.worker.onmessage = onWorkerMessage;
-  state.worker.onerror = (event) => finishError(event.message || 'Model worker failed to load.');
-  return state.worker;
-}
-
 function startGeneration({ retry = false, continuation = false } = {}) {
   if (state.busy) return;
   const thread = state.current;
@@ -247,95 +240,40 @@ function startGeneration({ retry = false, continuation = false } = {}) {
     thread.messages.push(message);
   }
   const id = crypto.randomUUID();
-  const task = { id, thread, message, continuation, initialContent: message.content, stopped: false };
+  const task = { id, thread, message, continuation, initialContent: message.content, controller: new AbortController() };
   state.task = task;
   setBusy(true);
-  setStatus('Loading model / generating…');
+  setStatus('Waiting for gateway…');
   const messages = thread.messages.slice(0, -1).map(({ role, content }) => ({ role, content }));
   if (continuation) {
     messages.push({ role: 'assistant', content: message.content });
     messages.push({ role: 'user', content: 'Continue the previous answer from where it stopped. Do not repeat earlier text.' });
   }
-  if (state.gateway.apiKey) { void runGatewayTask(task, messages, state.settings.replyTokens); return; }
-  getWorker().postMessage({ type: 'generate', id, messages, maxNewTokens: state.settings.replyTokens, contextMessages: state.settings.contextMessages, systemPrompt: state.settings.systemPrompt });
+  if (!state.gateway.apiKey || !state.gateway.model) { finishError('Set a gateway API key and model in Settings.'); return; }
+  void runGatewayTask(task, messages.slice(-state.settings.contextMessages), state.settings.replyTokens);
 }
 
 async function runGatewayTask(task, messages, maxTokens) {
   try {
     setStatus('Waiting for gateway…');
-    const response = await createGatewayChat({ baseUrl: state.gateway.baseUrl, apiKey: state.gateway.apiKey, messages, model: state.gateway.model || 'org-model', maxOutputTokens: maxTokens, stream: true, onToken: (token) => { if (token) task.message.content += token; } });
+    const response = await createGatewayChat({ baseUrl: state.gateway.baseUrl, apiKey: state.gateway.apiKey, messages, model: state.gateway.model || 'org-model', maxOutputTokens: maxTokens, stream: true, signal: task.controller.signal, onToken: (token) => { if (token) { task.message.content += token; renderMessages(); } } });
     const content = response?.choices?.[0]?.message?.content || task.initialContent || '';
     task.message.content = content;
-    task.message.truncated = false;
+    task.message.truncated = response?.choices?.[0]?.finish_reason === 'length';
     task.thread.updatedAt = new Date().toISOString();
     state.task = null;
     if (!task.thread.privateChat) persist();
     renderMessages();
     const last = state.current.messages.at(-1);
-    const canTitle = !task.thread.privateChat && task.thread.title === 'New conversation' && !task.thread.customTitle && task.thread.messages.length === 2 && task.message.content;
-    if (canTitle) {
-      const id = crypto.randomUUID();
-      state.queuedTitle = { id, thread: task.thread };
-      if (state.worker) state.worker.postMessage({ type: 'generate', id, title: true, messages: task.thread.messages.map(({ role, content }) => ({ role, content })) });
+    if (!task.thread.privateChat && task.thread.title === 'New conversation' && !task.thread.customTitle) {
+      const first = task.thread.messages.find((entry) => entry.role === 'user')?.content || '';
+      task.thread.title = first.trim().replace(/\s+/g, ' ').slice(0, 48) || 'New conversation';
+      persistThread(task.thread);
     }
     setBusy(false);
     setStatus('Ready');
   } catch (error) {
     finishError(error?.message || 'Gateway request failed.');
-  }
-}
-
-function onWorkerMessage({ data }) {
-  if (data.type === 'loading') { setStatus(`Loading ${data.device.toUpperCase()} model (${data.dtype})…`); return; }
-  if (data.type === 'download') { setStatus(`Downloading model: ${data.percent}%`); return; }
-  if (data.type === 'ready') { setStatus(`Ready · ${data.device.toUpperCase()} · ${data.dtype}`); return; }
-  if (state.queuedTitle && data.id === state.queuedTitle.id) {
-    if (data.type === 'done') {
-      const title = data.text.replace(/["'\n\r]/g, ' ').trim().replace(/\s+/g, ' ').split(' ').slice(0, 5).join(' ');
-      if (title && !state.queuedTitle.thread.customTitle) { state.queuedTitle.thread.title = title.slice(0, 48); persistThread(state.queuedTitle.thread); }
-      state.queuedTitle = false;
-      setBusy(false);
-      setStatus('Ready');
-    } else if (data.type === 'error') {
-      state.queuedTitle = false;
-      setBusy(false);
-      setStatus('Ready');
-    }
-    return;
-  }
-  const task = state.task;
-  if (!task || data.id !== task.id) return;
-  if (data.type === 'token') {
-    task.message.content += data.text;
-    const content = $('#messages .message:last-child .content');
-    if (content) renderMarkdown(content, task.message.content);
-    $('#messages').scrollTop = $('#messages').scrollHeight;
-    return;
-  }
-  if (data.type === 'error') { finishError(data.message); return; }
-  if (data.type !== 'done') return;
-  const fresh = data.text || '';
-  if (fresh) task.message.content = task.initialContent + fresh;
-  if (task.stopped && !task.message.content) {
-    task.thread.messages.pop();
-    state.task = null;
-    if (!task.thread.privateChat) persist();
-    setBusy(false);
-    setStatus('Stopped');
-    return;
-  }
-  task.message.truncated = !!data.truncated && !task.stopped;
-  task.thread.updatedAt = new Date().toISOString();
-  state.task = null;
-  if (!task.thread.privateChat) persist();
-  renderMessages();
-  if (!task.thread.privateChat && task.thread.title === 'New conversation' && !task.thread.customTitle && task.thread.messages.length === 2 && task.message.content) {
-    const id = crypto.randomUUID();
-    state.queuedTitle = { id, thread: task.thread };
-    getWorker().postMessage({ type: 'generate', id, title: true, messages: task.thread.messages.map(({ role, content }) => ({ role, content })) });
-  } else {
-    setBusy(false);
-    setStatus('Ready');
   }
 }
 
@@ -347,7 +285,6 @@ function finishError(message) {
     state.task = null;
     if (!task.thread.privateChat) persist();
   }
-  state.queuedTitle = false;
   setBusy(false);
   setStatus(`Model error: ${message}`);
 }
@@ -375,30 +312,30 @@ $('#new-chat').addEventListener('click', () => setCurrent(newThread($('#private-
 $('#private-toggle').addEventListener('change', (event) => setCurrent(newThread(event.target.checked)));
 $('#search').addEventListener('input', renderThreads);
 $('#stop').addEventListener('click', () => {
-  if (state.task) { state.task.stopped = true; getWorker().postMessage({ type: 'stop' }); setStatus('Stopping…'); }
+  if (state.task) { state.task.controller.abort(); setStatus('Stopping…'); }
 });
 $('#continue-button').addEventListener('click', () => startGeneration({ continuation: true }));
 $('#mobile-menu').addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
 $('#settings-button').addEventListener('click', () => {
   $('#reply-tokens').value = String(state.settings.replyTokens);
   $('#context-messages').value = String(state.settings.contextMessages);
-  $('#system-prompt').value = state.settings.systemPrompt;
+  $('#gateway-base-url').value = state.gateway.baseUrl;
+  $('#gateway-api-key').value = state.gateway.apiKey;
+  $('#gateway-model').value = state.gateway.model;
   $('#settings-dialog').showModal();
 });
-$('#reset-system-prompt').addEventListener('click', () => { $('#system-prompt').value = DEFAULT_SYSTEM_PROMPT; });
 $('#save-settings').addEventListener('click', () => {
   state.settings = {
     replyTokens: Number($('#reply-tokens').value),
     contextMessages: Number($('#context-messages').value),
-    systemPrompt: $('#system-prompt').value.trim() || DEFAULT_SYSTEM_PROMPT,
   };
-  if (!saveSettings(store, state.settings)) setStatus('Could not save settings in this browser.');
   state.gateway = {
     baseUrl: String($('#gateway-base-url').value || DEFAULT_GATEWAY_BASE_URL).replace(/\/+$/, ''),
     apiKey: String($('#gateway-api-key').value || DEFAULT_GATEWAY_API_KEY),
     model: String($('#gateway-model').value || DEFAULT_GATEWAY_MODEL),
   };
-  if (!saveGatewaySettings(store, state.gateway)) setStatus('Could not save gateway settings in this browser.');
+  if (!saveGatewaySettings(store, state.gateway, window.sessionStorage)) setStatus('Could not save gateway settings in this browser.');
+  else setStatus('Ready');
 });
 window.addEventListener('popstate', () => {
   if (state.busy) return;

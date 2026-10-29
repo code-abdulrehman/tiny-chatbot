@@ -7,7 +7,7 @@ import json
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Iterator, Optional
+from typing import Iterator
 
 CHAT = "chat"
 COMPLETION = "completion"

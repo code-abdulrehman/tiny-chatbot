@@ -1,6 +1,6 @@
 # Model Gateway: reusable API for a model hosted on one device
 
-**Status:** architecture proposal, 29 October 2026, now moving into implementation on branch `model-gateway`. The gateway foundation (errors, adapters, quota, auth, router, admin, billing webhook, database store tier) and the browser gateway client are implemented; the in-process stores still back local development until the PostgreSQL wiring lands. The existing Streamlit and browser editions remain clients of this service.
+**Status:** architecture proposal, 29 October 2026, now moving into implementation on branch `model-gateway`. The gateway foundation (errors, adapters, quota, auth, router, admin, billing webhook, database store tier) and the browser gateway client are implemented; the in-process stores still back local development until the PostgreSQL wiring lands. The legacy Streamlit and CLI chat implementations and the browser model worker have been removed. The browser interface remains a gateway client with local chat history.
 
 ## 1. Product boundary and decisions
 
@@ -277,7 +277,7 @@ Operational metrics: time to first token, output tokens/second, queue wait, acti
 
 **Production hardening:** verified payment webhooks, MFA for admins, secret manager, device identity rotation, SSE replay/terminal events, reconciliation worker, guardrail policy versions, monitoring, backups and restore drills, key leak workflow, disaster recovery, load tests, and tenant-isolation tests. Add Redis only when measured latency/traffic justifies it; PostgreSQL remains accounting truth. Multi-host scheduling and failover are a later feature. A single physical model host remains a single point of failure unless another host is added.
 
-**Migration from this repository:** the current browser edition can remain a local/offline mode. Add a selectable hosted-account mode that calls the gateway; never embed the owner's model or provider secret in its frontend. Streamlit can be another client. Existing browser-local chats can stay on the device; optional cloud chat sync requires a separate encrypted conversation service and consent. The current local SQLite chat storage does not become a multi-user enterprise database automatically.
+**Migration from this repository:** the browser interface now calls the gateway and retains browser-local chats. The old local model paths and SQLite chat storage have been removed. Optional cloud chat sync requires a separate encrypted conversation service and consent. Never embed the owner's model or provider secret in frontend code.
 
 ### Acceptance tests before launch
 

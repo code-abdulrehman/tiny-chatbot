@@ -10,7 +10,6 @@
     "test": "node test/storage.test.js && node test/gateway.test.js"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1",
     "dompurify": "^3.4.16",
     "lucide": "^1.61.0",
     "marked": "^18.1.1"

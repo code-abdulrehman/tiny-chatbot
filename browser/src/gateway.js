@@ -2,17 +2,17 @@ export const DEFAULT_GATEWAY_BASE_URL = 'http://127.0.0.1:8080';
 export const DEFAULT_GATEWAY_API_KEY = '';
 export const DEFAULT_GATEWAY_MODEL = '';
 
-export function loadGatewaySettings(storage) {
+export function loadGatewaySettings(storage, sessionStorage = storage) {
   const baseUrl = typeof storage?.getItem === 'function' ? (storage.getItem('gatewayBaseUrl') || DEFAULT_GATEWAY_BASE_URL) : DEFAULT_GATEWAY_BASE_URL;
-  const apiKey = typeof storage?.getItem === 'function' ? (storage.getItem('gatewayApiKey') || DEFAULT_GATEWAY_API_KEY) : DEFAULT_GATEWAY_API_KEY;
+  const apiKey = typeof sessionStorage?.getItem === 'function' ? (sessionStorage.getItem('gatewayApiKey') || DEFAULT_GATEWAY_API_KEY) : DEFAULT_GATEWAY_API_KEY;
   const model = typeof storage?.getItem === 'function' ? (storage.getItem('gatewayModel') || DEFAULT_GATEWAY_MODEL) : DEFAULT_GATEWAY_MODEL;
   return { baseUrl: String(baseUrl).replace(/\/+$/, ''), apiKey: String(apiKey), model: String(model) };
 }
 
-export function saveGatewaySettings(storage, settings) {
+export function saveGatewaySettings(storage, settings, sessionStorage = storage) {
   try {
     storage.setItem('gatewayBaseUrl', settings?.baseUrl || DEFAULT_GATEWAY_BASE_URL);
-    storage.setItem('gatewayApiKey', settings?.apiKey || DEFAULT_GATEWAY_API_KEY);
+    sessionStorage.setItem('gatewayApiKey', settings?.apiKey || DEFAULT_GATEWAY_API_KEY);
     storage.setItem('gatewayModel', settings?.model || DEFAULT_GATEWAY_MODEL);
     return true;
   } catch {
@@ -39,21 +39,25 @@ export async function listGatewayModels(baseUrl, apiKey) {
   return data;
 }
 
-export async function createGatewayChat({ baseUrl, apiKey, messages, model, maxOutputTokens, stream = true, onToken }) {
+export async function createGatewayChat({ baseUrl, apiKey, messages, model, maxOutputTokens, stream = true, onToken, signal }) {
   const response = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers: gatewayHeaders(apiKey),
     body: JSON.stringify({ model, messages, max_output_tokens: maxOutputTokens, stream }),
+    signal,
   });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(data?.error?.message || `Gateway chat failed with status ${response.status}`);
-  if (!stream) return data;
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.error?.message || `Gateway chat failed with status ${response.status}`);
+  }
+  if (!stream) return response.json();
   if (!response.body) throw new Error('Gateway did not return a streaming response body.');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
   let settled = false;
+  let finishReason = 'stop';
   while (!settled) {
     const { done: streamDone, value } = await reader.read();
     if (streamDone) break;
@@ -66,9 +70,10 @@ export async function createGatewayChat({ baseUrl, apiKey, messages, model, maxO
       if (!payload) continue;
       const event = JSON.parse(payload);
       if (event.event === 'token') { content += event.text || ''; onToken?.(event.text || ''); }
-      if (event.event === 'done') { settled = true; break; }
+      if (event.event === 'error') throw new Error(event.message || 'Gateway generation failed.');
+      if (event.event === 'done') { content = event.content || content; finishReason = event.finish_reason || 'stop'; settled = true; break; }
     }
   }
-  const finalContent = content || data?.choices?.[0]?.message?.content || '';
-  return { ...data, choices: [{ ...(data?.choices?.[0] || {}), message: { ...(data?.choices?.[0]?.message || {}), content: finalContent }, finish_reason: (data?.choices?.[0]?.finish_reason) || 'stop' }] };
+  if (!settled) throw new Error('Gateway stream ended before completion.');
+  return { choices: [{ message: { role: 'assistant', content }, finish_reason: finishReason }] };
 }

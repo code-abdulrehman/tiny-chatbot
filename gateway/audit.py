@@ -3,8 +3,6 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from gateway import errors
-
 AUTH_FAILED = "auth_failed"
 KEY_CREATED = "key_created"
 KEY_REVOKED = "key_revoked"

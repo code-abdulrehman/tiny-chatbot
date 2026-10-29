@@ -5,8 +5,6 @@ import hmac
 import time
 from typing import Optional
 
-from gateway import config, errors
-
 STRIPE_SIGNATURE_HEADER = "stripe-signature"
 SIGNATURE_TOLERANCE_SECONDS = 300
 
