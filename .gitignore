@@ -61,3 +61,4 @@ Thumbs.db
 .vscode/
 node_modules/
 browser/dist/
+.vercel/

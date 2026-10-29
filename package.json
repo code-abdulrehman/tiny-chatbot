@@ -1,0 +1,9 @@
+{
+  "name": "tiny-chatbot-deploy",
+  "private": true,
+  "workspaces": ["browser"],
+  "scripts": {
+    "build": "npm run build --workspace=browser",
+    "test:browser": "npm run test --workspace=browser"
+  }
+}

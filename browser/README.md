@@ -16,12 +16,11 @@ Open the local address Vite prints (usually `http://127.0.0.1:5173`). On the fir
 ## Build and host
 
 ```bash
-cd browser
 npm install
 npm run build
 ```
 
-Publish only `browser/dist/` to a static host such as GitHub Pages, Cloudflare Pages, or Netlify. Use `browser` as the project root if your host builds from the repository, with build command `npm run build` and output directory `dist`. No Python, Streamlit server, SQLite database, model upload, or API key is needed for this edition. Serve it over HTTPS for WebGPU; localhost also works during development. Streamlit Community Cloud is intended for Python Streamlit apps, so a static host is the simpler fit for this browser edition.
+Run the build commands from the repository root (the parent of `browser`). Publish only `browser/dist/` to a static host such as Vercel, GitHub Pages, Cloudflare Pages, or Netlify. The root `package.json` and `vercel.json` configure Vercel to install the browser workspace and build it from the repository root. A second `browser/vercel.json` covers projects whose Vercel Root Directory is `browser`. For a root-directory deployment, use **Install Command:** `npm install --include=dev`, **Build Command:** `npm run build`, **Output Directory:** `browser/dist`; for a `browser`-directory deployment, use the same install/build commands and **Output Directory:** `dist`. No Python, Streamlit server, SQLite database, model upload, or API key is needed for this edition. Serve it over HTTPS for WebGPU; localhost also works during development. Streamlit Community Cloud is intended for Python Streamlit apps, so a static host is the simpler fit for this browser edition.
 
 Saved chats are specific to each browser and can disappear if the user clears site data. There is no cross-device sync or account system. Model answers can be inaccurate. Retry replaces the latest reply; Continue asks the model to extend a token-limited answer. The wording may overlap because continuation is a new inference call.
 
